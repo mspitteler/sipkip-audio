@@ -52,20 +52,23 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
     opus_int16 out[MAX_FRAME_SIZE];
     pthread_t thread = 0;
     
+    dac_data->exit = 0;
+    dac_data->buffer_full = 1;
+    
     for (int packet_size_index = 0, packet_size_total = 0, packet_size = 0;
          packet_size_index <= opus_packets_len / sizeof(short);
          packet_size = ((short *)opus_packets)[packet_size_index++]) {
         int iret;
+        int frame_size;
     
         if (packet_size <= 0)
             continue;
 
-        int frame_size;
-
-        /* Decode the data. In this example, frame_size will be constant because
-           the encoder is using a constant frame size. However, that may not
-           be the case for all encoders, so the decoder must always check
-           the frame size returned. */
+        /**
+         * Decode the data. In this case, frame_size will be constant because the encoder is using
+         * a constant frame size. However, that may not be the case for all encoders,so the decoder must always check 
+         * the frame size returned.
+         */
         frame_size = opus_decode(decoder, opus + packet_size_total, packet_size, out, MAX_FRAME_SIZE, 0);
         if (frame_size < 0) {
             ESP_LOGE(TAG, "Decoder failed: %s\n", opus_strerror(frame_size));
@@ -73,8 +76,7 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
         }
        
         while (thread && dac_data->buffer_full)
-            esp_task_wdt_reset();
-        
+            vTaskDelay(1);
         /* Convert to 8-bit. */
         for (int i = 0; i < frame_size; i++)
             pcm_bytes[i] = ((out[i] + 32768) >> 8) & 0xFF;
@@ -114,7 +116,8 @@ void app_main(void) {
         .freq_hz = SAMPLE_RATE,
         .offset = 0,
         .clk_src = DAC_DIGI_CLK_SRC_APLL,   /* Using APLL as clock source to get a wider frequency range */
-        /* Assume the data in buffer is 'A B C D E F'
+        /**
+         * Assume the data in buffer is 'A B C D E F'
          * DAC_CHANNEL_MODE_SIMUL:
          *      - channel 0: A B C D E F
          *      - channel 1: A B C D E F
@@ -150,9 +153,6 @@ void app_main(void) {
     struct dac_data dac_data = {
         .handle = dac_handle,
         .data = pcm_bytes,
-        .data_size = 0,
-        .buffer_full = 1,
-        .exit = 0
     };
     
     DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, pcm_bytes, decoder, &dac_data);
