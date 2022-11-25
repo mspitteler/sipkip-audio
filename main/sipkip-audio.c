@@ -24,13 +24,19 @@
 #include "opus.h"
 #include "sipkip-audio.h"
 
-static const char *TAG = "sipkip-audio";
+static const char *const TAG = "sipkip-audio";
 
 static QueueHandle_t gpio_evt_queue = NULL;
-static int gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0};
+static bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const int io_num_to_gpio_states_index[] = {
-    [GPIO_INPUT_IO_0] = 0, [GPIO_INPUT_IO_1] = 1, [GPIO_INPUT_IO_2] = 2, [GPIO_INPUT_IO_3] = 3,
-    [GPIO_INPUT_IO_4] = 4, [GPIO_INPUT_IO_5] = 5, [GPIO_INPUT_IO_6] = 6, [GPIO_INPUT_IO_7] = 7
+    [GPIO_INPUT_STAR_L] = 0, [GPIO_INPUT_TRIANGLE_L] = 1, [GPIO_INPUT_SQUARE_L] = 2, [GPIO_INPUT_HEART_L] = 3,
+    [GPIO_INPUT_HEART_R] = 4, [GPIO_INPUT_SQUARE_R] = 5, [GPIO_INPUT_TRIANGLE_R] = 6, [GPIO_INPUT_STAR_R] = 7,
+    [GPIO_INPUT_BEAK] = 8
+};
+static const int gpio_states_index_to_io_num[] = {
+    [0] = GPIO_INPUT_STAR_L, [1] = GPIO_INPUT_TRIANGLE_L, [2] = GPIO_INPUT_SQUARE_L, [3] = GPIO_INPUT_HEART_L,
+    [4] = GPIO_INPUT_HEART_R, [5] = GPIO_INPUT_SQUARE_R, [6] = GPIO_INPUT_TRIANGLE_R, [7] = GPIO_INPUT_STAR_R,
+    [8] = GPIO_INPUT_BEAK
 };
 
 struct dac_data {
@@ -132,7 +138,7 @@ void app_main(void) {
 
     dac_continuous_handle_t dac_handle;
     dac_continuous_config_t cont_cfg = {
-        .chan_mask = DAC_CHANNEL_MASK_ALL,
+        .chan_mask = DAC_CHANNEL_MASK_CH0,
         .desc_num = 4,
         .buf_size = 2048,
         .freq_hz = SAMPLE_RATE,
@@ -152,7 +158,20 @@ void app_main(void) {
     /* Zero-initialize the config structure. */
     gpio_config_t io_conf = {};
     
-    /* Interrupt of rising edge. */
+    /* Disable interrupt. */
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    /* Set as output mode. */
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    /* Bit mask of the pins that you want to set,e.g.GPIO18/19. */
+    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
+    /* Disable pull-down mode. */
+    io_conf.pull_down_en = 0;
+    /* Disable pull-up mode. */
+    io_conf.pull_up_en = 0;
+    /* Configure GPIO with the given settings. */
+    gpio_config(&io_conf);
+    
+    /* Interrupt of falling edge. */
     io_conf.intr_type = GPIO_INTR_NEGEDGE;
     /* Bit mask of the pins, use GPIO4/5 here. */
     io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
@@ -170,14 +189,9 @@ void app_main(void) {
     /* Install gpio isr service. */
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
     /* Hook isr handler for specific gpio pins. */
-    gpio_isr_handler_add(GPIO_INPUT_IO_0, &gpio_isr_handler, (void *)GPIO_INPUT_IO_0);
-    gpio_isr_handler_add(GPIO_INPUT_IO_1, &gpio_isr_handler, (void *)GPIO_INPUT_IO_1);
-    gpio_isr_handler_add(GPIO_INPUT_IO_2, &gpio_isr_handler, (void *)GPIO_INPUT_IO_2);
-    gpio_isr_handler_add(GPIO_INPUT_IO_3, &gpio_isr_handler, (void *)GPIO_INPUT_IO_3);
-    gpio_isr_handler_add(GPIO_INPUT_IO_4, &gpio_isr_handler, (void *)GPIO_INPUT_IO_4);
-    gpio_isr_handler_add(GPIO_INPUT_IO_5, &gpio_isr_handler, (void *)GPIO_INPUT_IO_5);
-    gpio_isr_handler_add(GPIO_INPUT_IO_6, &gpio_isr_handler, (void *)GPIO_INPUT_IO_6);
-    gpio_isr_handler_add(GPIO_INPUT_IO_7, &gpio_isr_handler, (void *)GPIO_INPUT_IO_7);
+    for (int i = 0; i < sizeof(gpio_states_index_to_io_num) / sizeof(*gpio_states_index_to_io_num); i++)
+        gpio_isr_handler_add(gpio_states_index_to_io_num[i],
+                             &gpio_isr_handler, (void *)(ptrdiff_t)gpio_states_index_to_io_num[i]);
     
     /* Allocate continuous channels */
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
@@ -248,6 +262,12 @@ void app_main(void) {
                            &dac_data);
             gpio_states[7] = 0;
         }
+        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
+            DAC_WRITE_OPUS(__leren_fout_kijk_naar_het_knipperende_lichtje__opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
+        }
+        gpio_set_level(GPIO_OUTPUT_LED_STAR_R, 1);
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
     
