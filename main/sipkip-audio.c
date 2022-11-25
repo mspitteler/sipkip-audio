@@ -8,7 +8,6 @@
 /* Needed for KDevelop code parser. */
 #define SOC_DAC_SUPPORTED 1
 
-#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -26,6 +25,13 @@
 #include "sipkip-audio.h"
 
 static const char *TAG = "sipkip-audio";
+
+static QueueHandle_t gpio_evt_queue = NULL;
+static int gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0};
+static const int io_num_to_gpio_states_index[] = {
+    [GPIO_INPUT_IO_0] = 0, [GPIO_INPUT_IO_1] = 1, [GPIO_INPUT_IO_2] = 2, [GPIO_INPUT_IO_3] = 3,
+    [GPIO_INPUT_IO_4] = 4, [GPIO_INPUT_IO_5] = 5, [GPIO_INPUT_IO_6] = 6, [GPIO_INPUT_IO_7] = 7
+};
 
 struct dac_data {
     dac_continuous_handle_t handle;
@@ -100,6 +106,22 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
     return 0;
 }
 
+static void IRAM_ATTR gpio_isr_handler(void* arg) {
+    uint32_t gpio_num = (ptrdiff_t)arg;
+    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
+}
+
+static void gpio_get_states(void* arg) {
+    uint32_t io_num;
+    for (;;) {
+        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
+            int level = gpio_get_level(io_num);
+            ESP_LOGI(TAG, "GPIO[%"PRIu32"] intr, val: %d\n", io_num, level);
+            gpio_states[io_num_to_gpio_states_index[io_num]] = !level;
+        }
+    }
+}
+
 void app_main(void) {
     esp_pthread_cfg_t cfg;
    
@@ -127,6 +149,36 @@ void app_main(void) {
          */
         .chan_mode = DAC_CHANNEL_MODE_SIMUL,
     };
+    /* Zero-initialize the config structure. */
+    gpio_config_t io_conf = {};
+    
+    /* Interrupt of rising edge. */
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;
+    /* Bit mask of the pins, use GPIO4/5 here. */
+    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
+    /* Set as input mode. */
+    io_conf.mode = GPIO_MODE_INPUT;
+    /* Enable pull-up mode. */
+    io_conf.pull_up_en = 1;
+    gpio_config(&io_conf);
+    
+    /* Create a queue to handle gpio event from isr. */
+    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
+    /* Start gpio task. */
+    xTaskCreate(&gpio_get_states, "GPIO get states", 2048, NULL, 10, NULL);
+
+    /* Install gpio isr service. */
+    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
+    /* Hook isr handler for specific gpio pins. */
+    gpio_isr_handler_add(GPIO_INPUT_IO_0, &gpio_isr_handler, (void *)GPIO_INPUT_IO_0);
+    gpio_isr_handler_add(GPIO_INPUT_IO_1, &gpio_isr_handler, (void *)GPIO_INPUT_IO_1);
+    gpio_isr_handler_add(GPIO_INPUT_IO_2, &gpio_isr_handler, (void *)GPIO_INPUT_IO_2);
+    gpio_isr_handler_add(GPIO_INPUT_IO_3, &gpio_isr_handler, (void *)GPIO_INPUT_IO_3);
+    gpio_isr_handler_add(GPIO_INPUT_IO_4, &gpio_isr_handler, (void *)GPIO_INPUT_IO_4);
+    gpio_isr_handler_add(GPIO_INPUT_IO_5, &gpio_isr_handler, (void *)GPIO_INPUT_IO_5);
+    gpio_isr_handler_add(GPIO_INPUT_IO_6, &gpio_isr_handler, (void *)GPIO_INPUT_IO_6);
+    gpio_isr_handler_add(GPIO_INPUT_IO_7, &gpio_isr_handler, (void *)GPIO_INPUT_IO_7);
+    
     /* Allocate continuous channels */
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
     /* Enable the continuous channels */
@@ -155,8 +207,49 @@ void app_main(void) {
         .data = pcm_bytes,
     };
     
-    DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, pcm_bytes, decoder, &dac_data);
-    DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, pcm_bytes, decoder, &dac_data);
+    for (;;) {
+        if (gpio_states[0]) {
+            DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[0] = 0;
+        }
+        if (gpio_states[1]) {
+            DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[1] = 0;
+        }
+        if (gpio_states[2]) {
+            DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[2] = 0;
+        }
+        if (gpio_states[3]) {
+            DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[3] = 0;
+        }
+        if (gpio_states[4]) {
+            DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[4] = 0;
+        }
+        if (gpio_states[5]) {
+            DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, 
+                           pcm_bytes, decoder, &dac_data);
+            gpio_states[5] = 0;
+        }
+        if (gpio_states[6]) {
+            DAC_WRITE_OPUS(__leren_hmm__ik_ben_een_beetje_sip_opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[6] = 0;
+        }
+        if (gpio_states[7]) {
+            DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, pcm_bytes, decoder, 
+                           &dac_data);
+            gpio_states[7] = 0;
+        }
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+    }
     
     free(pcm_bytes);
    
