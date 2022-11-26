@@ -155,6 +155,39 @@ void app_main(void) {
          */
         .chan_mode = DAC_CHANNEL_MODE_SIMUL,
     };
+    
+    /* Allocate continuous channels */
+    ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
+    /* Enable the continuous channels */
+    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
+    ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");
+
+    /* Create a new decoder state. */
+    decoder = opus_decoder_create(SAMPLE_RATE, 1, &err);
+    if (err < 0) {
+        ESP_LOGE(TAG, "Failed to create decoder: %s\n", opus_strerror(err));
+        return;
+    }
+    
+    pcm_bytes = malloc(MAX_FRAME_SIZE);
+    if (!pcm_bytes) {
+        ESP_LOGE(TAG, "Failed to allocate memory for dac output buffer\n");
+        return;
+    }
+    
+    cfg = esp_pthread_get_default_config();
+    cfg.pin_to_core = 1;
+    ESP_ERROR_CHECK(esp_pthread_set_cfg(&cfg));
+
+    struct dac_data dac_data = {
+        .handle = dac_handle,
+        .data = pcm_bytes,
+    };
+    
+    bool even = 0;
+    DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, pcm_bytes, 
+                   decoder, &dac_data);
+    
     /* Zero-initialize the config structure. */
     gpio_config_t io_conf = {};
     
@@ -193,79 +226,68 @@ void app_main(void) {
         gpio_isr_handler_add(gpio_states_index_to_io_num[i],
                              &gpio_isr_handler, (void *)(ptrdiff_t)gpio_states_index_to_io_num[i]);
     
-    /* Allocate continuous channels */
-    ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
-    /* Enable the continuous channels */
-    ESP_ERROR_CHECK(dac_continuous_enable(dac_handle));
-    ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");
-
-    /* Create a new decoder state. */
-    decoder = opus_decoder_create(SAMPLE_RATE, 1, &err);
-    if (err < 0) {
-        ESP_LOGE(TAG, "Failed to create decoder: %s\n", opus_strerror(err));
-        return;
-    }
-    
-    pcm_bytes = malloc(MAX_FRAME_SIZE);
-    if (!pcm_bytes) {
-        ESP_LOGE(TAG, "Failed to allocate memory for dac output buffer\n");
-        return;
-    }
-    
-    cfg = esp_pthread_get_default_config();
-    cfg.pin_to_core = 1;
-    ESP_ERROR_CHECK(esp_pthread_set_cfg(&cfg));
-
-    struct dac_data dac_data = {
-        .handle = dac_handle,
-        .data = pcm_bytes,
-    };
-    
     for (;;) {
-        if (gpio_states[0]) {
-            DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[0] = 0;
+        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]]) {
+            DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, pcm_bytes, decoder, &dac_data);
+            if (even)
+                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            else
+                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] = 0;
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]] = 0;
+            even = !even;
         }
-        if (gpio_states[1]) {
-            DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[1] = 0;
+        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] || 
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]]) {
+            DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, pcm_bytes, decoder, &dac_data);
+            if (even)
+                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            else
+                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] = 0;
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]] = 0;
+            even = !even;
         }
-        if (gpio_states[2]) {
-            DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[2] = 0;
+        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] || 
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]]) {
+            DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, pcm_bytes, decoder, &dac_data);
+            if (even)
+                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            else
+                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] = 0;
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]] = 0;
+            even = !even;
         }
-        if (gpio_states[3]) {
-            DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[3] = 0;
-        }
-        if (gpio_states[4]) {
-            DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[4] = 0;
-        }
-        if (gpio_states[5]) {
-            DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, 
-                           pcm_bytes, decoder, &dac_data);
-            gpio_states[5] = 0;
-        }
-        if (gpio_states[6]) {
-            DAC_WRITE_OPUS(__leren_hmm__ik_ben_een_beetje_sip_opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[6] = 0;
-        }
-        if (gpio_states[7]) {
-            DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, pcm_bytes, decoder, 
-                           &dac_data);
-            gpio_states[7] = 0;
+        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] || 
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]]) {
+            DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, pcm_bytes, decoder, &dac_data);
+            if (even)
+                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            else
+                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] = 0;
+            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]] = 0;
+            even = !even;
         }
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
-            DAC_WRITE_OPUS(__leren_fout_kijk_naar_het_knipperende_lichtje__opus, pcm_bytes, decoder, 
-                           &dac_data);
+            if (even)
+                DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, pcm_bytes, decoder, 
+                               &dac_data);
+            else
+                DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, pcm_bytes, decoder, 
+                               &dac_data);
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
+            even = !even;
         }
         gpio_set_level(GPIO_OUTPUT_LED_STAR_R, 1);
         vTaskDelay(100 / portTICK_PERIOD_MS);
