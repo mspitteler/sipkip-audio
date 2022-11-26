@@ -17,6 +17,7 @@
 #include "esp_check.h"
 #include "esp_pthread.h"
 #include "esp_task_wdt.h"
+#include "esp_spiffs.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "driver/dac_continuous.h"
@@ -156,6 +157,51 @@ void app_main(void) {
         .chan_mode = DAC_CHANNEL_MODE_SIMUL,
     };
     
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = NULL,
+        .max_files = 5,
+        .format_if_mount_failed = true
+    };
+    
+    ESP_LOGI(TAG, "Initializing SPIFFS");
+    
+    /**
+     * Use settings defined above to initialize and mount SPIFFS filesystem.
+     * NOTE: esp_vfs_spiffs_register is an all-in-one convenience function.
+     */
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+
+    if (ret != ESP_OK) {
+        if (ret == ESP_FAIL) {
+            ESP_LOGE(TAG, "Failed to mount or format filesystem");
+        } else if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+        } else {
+            ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+        }
+        return;
+    }
+
+    ESP_LOGI(TAG, "Performing SPIFFS_check().");
+    ret = esp_spiffs_check(conf.partition_label);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS_check() failed (%s)", esp_err_to_name(ret));
+        return;
+    } else {
+        ESP_LOGI(TAG, "SPIFFS_check() successful");
+    }
+
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info(conf.partition_label, &total, &used);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s). Formatting...", esp_err_to_name(ret));
+        esp_spiffs_format(conf.partition_label);
+        return;
+    } else {
+        ESP_LOGI(TAG, "Partition size: total: %lu, used: %lu", total, used);
+    }
+    
     /* Allocate continuous channels */
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
     /* Enable the continuous channels */
@@ -293,8 +339,13 @@ void app_main(void) {
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
     
+    /* NOTE: We should never reach this code. */
+    /* All done, unmount partition and disable SPIFFS. */
+    esp_vfs_spiffs_unregister(conf.partition_label);
+    ESP_LOGI(TAG, "SPIFFS unmounted");
+    
     free(pcm_bytes);
-   
-    printf("Done!\n");
+  
+    ESP_LOGI(TAG, "Done!\n");
     return;
 }
