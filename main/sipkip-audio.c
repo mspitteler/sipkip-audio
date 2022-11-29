@@ -4,6 +4,8 @@
 #include <inttypes.h>
 #include <time.h>
 #include <pthread.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 /* Needed for KDevelop code parser. */
 #define SOC_DAC_SUPPORTED 1
@@ -18,16 +20,28 @@
 #include "esp_pthread.h"
 #include "esp_task_wdt.h"
 #include "esp_spiffs.h"
+#include "esp_log.h"
+#include "nvs.h"
+#include "nvs_flash.h"
+#include "esp_vfs.h"
+#include "esp_bt.h"
+#include "esp_bt_main.h"
+#include "esp_bt_device.h"
+#include "esp_spp_api.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "driver/dac_continuous.h"
 
+#include "audio.h"
 #include "opus.h"
+#include "spp-task.h"
+#include "vfs-acceptor.h"
 #include "sipkip-audio.h"
 
 static const char *const TAG = "sipkip-audio";
 
 static QueueHandle_t gpio_evt_queue = NULL;
+static TaskHandle_t gpio_get_states_task_handle = NULL;
 static bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static const int io_num_to_gpio_states_index[] = {
     [GPIO_INPUT_STAR_L] = 0, [GPIO_INPUT_TRIANGLE_L] = 1, [GPIO_INPUT_SQUARE_L] = 2, [GPIO_INPUT_HEART_L] = 3,
@@ -40,6 +54,8 @@ static const int gpio_states_index_to_io_num[] = {
     [8] = GPIO_INPUT_BEAK
 };
 
+static const esp_spp_mode_t esp_spp_mode = ESP_SPP_MODE_VFS;
+
 struct dac_data {
     dac_continuous_handle_t handle;
     uint8_t *data;
@@ -50,7 +66,8 @@ struct dac_data {
 
 static void *dac_write_data_synchronously(void *data) {
     struct dac_data *dac_data = data;
-    ESP_LOGI(TAG, "Audio size %lu bytes, played at frequency %d Hz synchronously", dac_data->data_size, SAMPLE_RATE);
+    ESP_LOGI(TAG, "Audio size %lu bytes, played at frequency %d Hz synchronously", dac_data->data_size, 
+             OPUS_SAMPLE_RATE);
     uint32_t cnt = 1;
     while (!dac_data->exit) {
         ESP_LOGI(TAG, "Play count: %"PRIu32"\n", cnt++);
@@ -62,7 +79,7 @@ static void *dac_write_data_synchronously(void *data) {
 
 static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_packets, unsigned int opus_packets_len, 
                           unsigned char *pcm_bytes, OpusDecoder *decoder, struct dac_data *dac_data) {
-    opus_int16 out[MAX_FRAME_SIZE];
+    opus_int16 out[OPUS_MAX_FRAME_SIZE];
     pthread_t thread = 0;
     
     dac_data->exit = 0;
@@ -82,7 +99,7 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
          * a constant frame size. However, that may not be the case for all encoders,so the decoder must always check 
          * the frame size returned.
          */
-        frame_size = opus_decode(decoder, opus + packet_size_total, packet_size, out, MAX_FRAME_SIZE, 0);
+        frame_size = opus_decode(decoder, opus + packet_size_total, packet_size, out, OPUS_MAX_FRAME_SIZE, 0);
         if (frame_size < 0) {
             ESP_LOGE(TAG, "Decoder failed: %s\n", opus_strerror(frame_size));
             return -1;
@@ -129,6 +146,65 @@ static void gpio_get_states(void* arg) {
     }
 }
 
+static char *bda2str(uint8_t *bda, char *str, size_t size) {
+    if (bda == NULL || str == NULL || size < 18) {
+        return NULL;
+    }
+
+    uint8_t *p = bda;
+    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
+            p[0], p[1], p[2], p[3], p[4], p[5]);
+    return str;
+}
+
+char *readable_file_size(size_t size /* in bytes */, char *buf) {
+    int i = 0;
+    const char* units[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"};
+    size *= 1000;
+    while (size >= 1024000) {
+        size /= 1024;
+        i++;
+    }
+    sprintf(buf, "%lu.%lu %s", size / 1000, size % 1000, units[i]);
+    return buf;
+}
+
+/**
+ * Lists all files and sub-directories at given path.
+ */
+static void list_files(const char *const path) {
+    struct dirent *dp;
+    DIR *dir = opendir(path);
+
+    /* Unable to open directory stream. */
+    if (!dir) 
+        return; 
+
+    while ((dp = readdir(dir)) != NULL) {
+        char d_path[CONFIG_SPIFFS_OBJ_NAME_LEN]; /* Here I am using sprintf which is safer than strcat. */
+        sprintf(d_path, "%s/%s", path, dp->d_name);
+        
+        if (dp->d_type != DT_DIR) {
+            struct stat st;
+            char buf[10];
+            
+            if (stat(d_path, &st)) {
+                ESP_LOGE(TAG, "Failed to stat file %s: %s", d_path, strerror(errno));
+                continue;
+            }
+
+            ESP_LOGI(TAG, LOG_COLOR(LOG_COLOR_BLUE)"%s,\t%s"LOG_RESET_COLOR, d_path, 
+                     readable_file_size(st.st_size, buf));
+        } else if (strcmp(dp->d_name, ".") && strcmp(dp->d_name, "..")) {
+            ESP_LOGI(TAG, LOG_COLOR(LOG_COLOR_GREEN)"%s\n"LOG_RESET_COLOR, d_path);
+            list_files(d_path); /* Recall with the new path. */
+        }
+    }
+
+    /* Close directory stream. */
+    closedir(dir);
+}
+
 void app_main(void) {
     esp_pthread_cfg_t cfg;
    
@@ -142,7 +218,7 @@ void app_main(void) {
         .chan_mask = DAC_CHANNEL_MASK_CH0,
         .desc_num = 4,
         .buf_size = 2048,
-        .freq_hz = SAMPLE_RATE,
+        .freq_hz = OPUS_SAMPLE_RATE,
         .offset = 0,
         .clk_src = DAC_DIGI_CLK_SRC_APLL,   /* Using APLL as clock source to get a wider frequency range */
         /**
@@ -158,7 +234,7 @@ void app_main(void) {
     };
     
     esp_vfs_spiffs_conf_t conf = {
-        .base_path = "/spiffs",
+        .base_path = SPIFFS_BASE_PATH,
         .partition_label = NULL,
         .max_files = 5,
         .format_if_mount_failed = true
@@ -183,6 +259,7 @@ void app_main(void) {
         return;
     }
 
+#if (SPIFFS_CHECK_AT_BOOT == true)
     ESP_LOGI(TAG, "Performing SPIFFS_check().");
     ret = esp_spiffs_check(conf.partition_label);
     if (ret != ESP_OK) {
@@ -191,6 +268,7 @@ void app_main(void) {
     } else {
         ESP_LOGI(TAG, "SPIFFS_check() successful");
     }
+#endif
 
     size_t total = 0, used = 0;
     ret = esp_spiffs_info(conf.partition_label, &total, &used);
@@ -202,6 +280,73 @@ void app_main(void) {
         ESP_LOGI(TAG, "Partition size: total: %lu, used: %lu", total, used);
     }
     
+    list_files(SPIFFS_BASE_PATH);
+    
+    char bda_str[18] = {0};
+    ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    if (esp_bt_controller_init(&bt_cfg) != ESP_OK) {
+        ESP_LOGE(TAG,"%s initialize controller failed", __func__);
+        return;
+    }
+
+    if (esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT) != ESP_OK) {
+        ESP_LOGE(TAG,"%s enable controller failed", __func__);
+        return;
+    }
+
+    if (esp_bluedroid_init() != ESP_OK) {
+        ESP_LOGE(TAG,"%s initialize bluedroid failed", __func__);
+        return;
+    }
+
+    if (esp_bluedroid_enable() != ESP_OK) {
+        ESP_LOGE(TAG,"%s enable bluedroid failed", __func__);
+        return;
+    }
+
+    if (esp_bt_gap_register_callback(&esp_bt_gap_cb) != ESP_OK) {
+        ESP_LOGE(TAG,"%s gap register failed: %s\n", __func__, esp_err_to_name(ret));
+        return;
+    }
+
+    if (esp_spp_register_callback(&esp_spp_stack_cb) != ESP_OK) {
+        ESP_LOGE(TAG,"%s spp register failed", __func__);
+        return;
+    }
+
+    spp_task_task_start_up();
+
+    if (esp_spp_init(esp_spp_mode) != ESP_OK) {
+        ESP_LOGE(TAG,"%s spp init failed", __func__);
+        return;
+    }
+
+#if (CONFIG_BT_SSP_ENABLED == true)
+    /* Set default parameters for Secure Simple Pairing */
+    esp_bt_sp_param_t param_type = ESP_BT_SP_IOCAP_MODE;
+    esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
+    esp_bt_gap_set_security_param(param_type, &iocap, sizeof(uint8_t));
+#endif
+
+    /**
+     * Set default parameters for Legacy Pairing
+     * Use variable pin, input pin code when pairing
+     */
+    esp_bt_pin_type_t pin_type = ESP_BT_PIN_TYPE_VARIABLE;
+    esp_bt_pin_code_t pin_code;
+    esp_bt_gap_set_pin(pin_type, 0, pin_code);
+
+    ESP_LOGI(TAG,"Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
+    
     /* Allocate continuous channels */
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
     /* Enable the continuous channels */
@@ -209,20 +354,21 @@ void app_main(void) {
     ESP_LOGI(TAG, "DAC initialized success, DAC DMA is ready");
 
     /* Create a new decoder state. */
-    decoder = opus_decoder_create(SAMPLE_RATE, 1, &err);
+    decoder = opus_decoder_create(OPUS_SAMPLE_RATE, 1, &err);
     if (err < 0) {
         ESP_LOGE(TAG, "Failed to create decoder: %s\n", opus_strerror(err));
         return;
     }
     
-    pcm_bytes = malloc(MAX_FRAME_SIZE);
+    pcm_bytes = malloc(OPUS_MAX_FRAME_SIZE);
     if (!pcm_bytes) {
         ESP_LOGE(TAG, "Failed to allocate memory for dac output buffer\n");
         return;
     }
     
     cfg = esp_pthread_get_default_config();
-    cfg.pin_to_core = 1;
+    cfg.pin_to_core = 1; /* Pin to core 1, since the main app will run on core 0. */
+    cfg.prio = 0;
     ESP_ERROR_CHECK(esp_pthread_set_cfg(&cfg));
 
     struct dac_data dac_data = {
@@ -263,7 +409,7 @@ void app_main(void) {
     /* Create a queue to handle gpio event from isr. */
     gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
     /* Start gpio task. */
-    xTaskCreate(&gpio_get_states, "GPIO get states", 2048, NULL, 10, NULL);
+    xTaskCreate(&gpio_get_states, "GPIO get states", 2048, NULL, 10, &gpio_get_states_task_handle);
 
     /* Install gpio isr service. */
     gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
