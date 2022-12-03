@@ -6,6 +6,8 @@
 #include <pthread.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 /* Needed for KDevelop code parser. */
 #define SOC_DAC_SUPPORTED 1
@@ -68,6 +70,24 @@ struct dac_data {
     volatile int exit;
 };
 
+struct opus_mem_or_file {
+    bool is_mem;
+    bool is_file;
+    union {
+        unsigned int opus_packets_len;
+        struct {
+            unsigned int opus_packets_len;
+            const unsigned char *opus;
+            const unsigned char *opus_packets;
+        } mem;
+        struct {
+            unsigned int opus_packets_len;
+            FILE *opus;
+            FILE *opus_packets;
+        } file;
+    };
+};
+
 static void *dac_write_data_synchronously(void *data) {
     struct dac_data *dac_data = data;
     ESP_LOGI(TAG, "Audio size %lu bytes, played at frequency %d Hz synchronously", dac_data->data_size, 
@@ -81,32 +101,60 @@ static void *dac_write_data_synchronously(void *data) {
     return NULL;
 }
 
-static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_packets, unsigned int opus_packets_len, 
-                          unsigned char *pcm_bytes, OpusDecoder *decoder, struct dac_data *dac_data) {
+static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, unsigned char *pcm_bytes,
+                                OpusDecoder *decoder, struct dac_data *dac_data) {
     opus_int16 out[OPUS_MAX_FRAME_SIZE];
     pthread_t thread = 0;
-    
+
     dac_data->exit = 0;
     dac_data->buffer_full = 1;
-    
+
     for (int packet_size_index = 0, packet_size_total = 0, packet_size = 0;
-         packet_size_index <= opus_packets_len / sizeof(short);
-         packet_size = ((short *)opus_packets)[packet_size_index++]) {
+         packet_size_index <= opus_mem_or_file.opus_packets_len / sizeof(short);
+         packet_size = (opus_mem_or_file.is_mem ? ((short *)opus_mem_or_file.mem.opus_packets)[packet_size_index] : 
+            (fgetc(opus_mem_or_file.file.opus_packets) & 0xFF) | (fgetc(opus_mem_or_file.file.opus_packets) << 8)), 
+            packet_size_index++) {
         int iret;
         int frame_size;
+        void *buf;
+        bool free_after_decode;
     
         if (packet_size <= 0)
             continue;
 
+        if (opus_mem_or_file.is_mem) {
+            buf = (void *)(opus_mem_or_file.mem.opus + packet_size_total);
+            free_after_decode = false;
+        } else {
+            size_t bytes_read;
+            buf = malloc(packet_size);
+            if (!buf) {
+                ESP_LOGE(TAG, "Failed to allocate memory for opus input buffer\n");
+                return ESP_FAIL;
+            }
+            if ((bytes_read = fread(buf, 1, packet_size, opus_mem_or_file.file.opus)) < packet_size) {
+                ESP_LOGE(TAG, "Opus file is too short, read %lu, while expecting %d", bytes_read, packet_size);
+                free(buf);
+                return ESP_FAIL;
+            }
+                
+            free_after_decode = true;
+        }
+        
         /**
          * Decode the data. In this case, frame_size will be constant because the encoder is using
          * a constant frame size. However, that may not be the case for all encoders,so the decoder must always check 
          * the frame size returned.
          */
-        frame_size = opus_decode(decoder, opus + packet_size_total, packet_size, out, OPUS_MAX_FRAME_SIZE, 0);
+        frame_size = opus_decode(decoder, buf, packet_size, out, OPUS_MAX_FRAME_SIZE, 0);
+        
+        /* Free memory if apliccable. */
+        if (free_after_decode)
+            free(buf);
+        
         if (frame_size < 0) {
             ESP_LOGE(TAG, "Decoder failed: %s\n", opus_strerror(frame_size));
-            return -1;
+            return ESP_FAIL;
         }
        
         while (thread && dac_data->buffer_full)
@@ -122,7 +170,7 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
             iret = pthread_create(&thread, NULL, &dac_write_data_synchronously, dac_data);
             if (iret) {
                 ESP_LOGE(TAG, "Failed to create pthread for dac writing: %d\n", iret);
-                return -1;
+                return ESP_FAIL;
             }
         }
         
@@ -131,7 +179,7 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
     dac_data->exit = 1;
     pthread_join(thread, NULL);
     
-    return 0;
+    return ESP_OK;
 }
 
 static void gpio_update_states(void* arg) {
@@ -158,6 +206,7 @@ static void gpio_update_states(void* arg) {
                 gpio_states[i + ((uint8_t)gpio_mux_clips << 3)] = gpio_get_level(io_num);
                 gpio_pulldown_dis(io_num);
             }
+            gpio_states[16] = gpio_get_level(gpio_states_index_to_io_num[16]);
         } else {
             gpio_set_level(GPIO_OUTPUT_LED_LEFT, 1);
             gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 1);
@@ -166,7 +215,7 @@ static void gpio_update_states(void* arg) {
             gpio_set_level(GPIO_MUX_BUTTONS, 0);
             gpio_set_level(GPIO_MUX_CLIPS, 0);
             
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < sizeof(gpio_output_states); i++)
                 gpio_set_level(gpio_states_index_to_io_num[i], !gpio_output_states[i]);
         }
         
@@ -407,7 +456,7 @@ void app_main(void) {
     };
     
     bool even = 0;
-    DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, pcm_bytes, 
+    DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, pcm_bytes, 
                    decoder, &dac_data);
     
     /* Zero-initialize the config structure. */
@@ -442,12 +491,12 @@ void app_main(void) {
     for (;;) {
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]]) {
-            DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, pcm_bytes, decoder, &dac_data);
+            DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, mem, pcm_bytes, decoder, &dac_data);
             if (even)
-                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             else
-                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] = 0;
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]] = 0;
@@ -455,12 +504,12 @@ void app_main(void) {
         }
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] || 
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]]) {
-            DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, pcm_bytes, decoder, &dac_data);
+            DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, mem, pcm_bytes, decoder, &dac_data);
             if (even)
-                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             else
-                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] = 0;
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]] = 0;
@@ -468,12 +517,12 @@ void app_main(void) {
         }
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] || 
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]]) {
-            DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, pcm_bytes, decoder, &dac_data);
+            DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, mem, pcm_bytes, decoder, &dac_data);
             if (even)
-                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             else
-                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] = 0;
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]] = 0;
@@ -481,24 +530,35 @@ void app_main(void) {
         }
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] || 
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]]) {
-            DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, pcm_bytes, decoder, &dac_data);
+            DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, mem, pcm_bytes, decoder, &dac_data);
             if (even)
-                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             else
-                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, pcm_bytes, decoder, 
+                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, mem, pcm_bytes, decoder, 
                                &dac_data);
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] = 0;
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]] = 0;
             even = !even;
         }
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
+            FILE *spiffs_file_opus = fopen("/spiffs/1.opus", "r");
+            FILE *spiffs_file_opus_packets = fopen("/spiffs/1.opus_packets", "r");
+            unsigned int spiffs_file_opus_packets_len;
+           
+            if (spiffs_file_opus && spiffs_file_opus_packets) {
+                fseek(spiffs_file_opus_packets, 0, SEEK_END);
+                spiffs_file_opus_packets_len = ftell(spiffs_file_opus_packets);
+                fseek(spiffs_file_opus_packets, 0, SEEK_SET);
+                DAC_WRITE_OPUS(spiffs_file_opus, file, pcm_bytes, decoder, &dac_data);
+            }
+                
             if (even)
-                DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, pcm_bytes, decoder, 
-                               &dac_data);
+                DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, pcm_bytes, 
+                               decoder, &dac_data);
             else
-                DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, pcm_bytes, decoder, 
-                               &dac_data);
+                DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, mem, pcm_bytes, 
+                               decoder, &dac_data);
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
             even = !even;
         }
