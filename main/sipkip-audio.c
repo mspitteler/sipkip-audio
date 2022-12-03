@@ -40,18 +40,22 @@
 
 static const char *const TAG = "sipkip-audio";
 
-static QueueHandle_t gpio_evt_queue = NULL;
-static TaskHandle_t gpio_get_states_task_handle = NULL;
-static bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static TaskHandle_t gpio_update_states_task_handle = NULL;
+
+static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static volatile bool gpio_output_states[] = {1, 0, 0, 0, 0, 0, 0, 0};
+
 static const int io_num_to_gpio_states_index[] = {
     [GPIO_INPUT_STAR_L] = 0, [GPIO_INPUT_TRIANGLE_L] = 1, [GPIO_INPUT_SQUARE_L] = 2, [GPIO_INPUT_HEART_L] = 3,
     [GPIO_INPUT_HEART_R] = 4, [GPIO_INPUT_SQUARE_R] = 5, [GPIO_INPUT_TRIANGLE_R] = 6, [GPIO_INPUT_STAR_R] = 7,
-    [GPIO_INPUT_BEAK] = 8
+    /* 8..15 are virtual inputs for the clips, that can be read if gpio_set_mux_clips is set to true. */
+    [GPIO_INPUT_BEAK] = 16
 };
 static const int gpio_states_index_to_io_num[] = {
     [0] = GPIO_INPUT_STAR_L, [1] = GPIO_INPUT_TRIANGLE_L, [2] = GPIO_INPUT_SQUARE_L, [3] = GPIO_INPUT_HEART_L,
     [4] = GPIO_INPUT_HEART_R, [5] = GPIO_INPUT_SQUARE_R, [6] = GPIO_INPUT_TRIANGLE_R, [7] = GPIO_INPUT_STAR_R,
-    [8] = GPIO_INPUT_BEAK
+    /* 8..15 are virtual inputs for the clips, that can be read if gpio_set_mux_clips is set to true. */
+    [16] = GPIO_INPUT_BEAK
 };
 
 static const esp_spp_mode_t esp_spp_mode = ESP_SPP_MODE_VFS;
@@ -60,8 +64,8 @@ struct dac_data {
     dac_continuous_handle_t handle;
     uint8_t *data;
     size_t data_size;
-    int buffer_full;
-    int exit;
+    volatile int buffer_full;
+    volatile int exit;
 };
 
 static void *dac_write_data_synchronously(void *data) {
@@ -130,19 +134,45 @@ static int dac_write_opus(const unsigned char *opus, const unsigned char *opus_p
     return 0;
 }
 
-static void IRAM_ATTR gpio_isr_handler(void* arg) {
-    uint32_t gpio_num = (ptrdiff_t)arg;
-    xQueueSendFromISR(gpio_evt_queue, &gpio_num, NULL);
-}
-
-static void gpio_get_states(void* arg) {
-    uint32_t io_num;
+static void gpio_update_states(void* arg) {
+    bool input = false, gpio_mux_clips = false;
+    
     for (;;) {
-        if(xQueueReceive(gpio_evt_queue, &io_num, portMAX_DELAY)) {
-            int level = gpio_get_level(io_num);
-            ESP_LOGI(TAG, "GPIO[%"PRIu32"] intr, val: %d\n", io_num, level);
-            gpio_states[io_num_to_gpio_states_index[io_num]] = !level;
+        if (input) {
+            for (int i = 0; i < 8; i++) {
+                int io_num = gpio_states_index_to_io_num[i];
+                gpio_set_level(io_num, 1);
+            }
+            /* If we're reading the inputs; alternate between buttons and clips. */
+            gpio_mux_clips = !gpio_mux_clips;
+            gpio_set_level(GPIO_MUX_BUTTONS, !gpio_mux_clips);
+            gpio_set_level(GPIO_MUX_CLIPS, gpio_mux_clips);
+            
+            gpio_set_level(GPIO_OUTPUT_LED_LEFT, 0);
+            gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 0);
+            gpio_set_level(GPIO_OUTPUT_LED_RIGHT, 0);
+            
+            for (int i = 0; i < 8; i++) {
+                int io_num = gpio_states_index_to_io_num[i];
+                gpio_pulldown_en(io_num);
+                gpio_states[i + ((uint8_t)gpio_mux_clips << 3)] = gpio_get_level(io_num);
+                gpio_pulldown_dis(io_num);
+            }
+        } else {
+            gpio_set_level(GPIO_OUTPUT_LED_LEFT, 1);
+            gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 1);
+            gpio_set_level(GPIO_OUTPUT_LED_RIGHT, 1);
+            
+            gpio_set_level(GPIO_MUX_BUTTONS, 0);
+            gpio_set_level(GPIO_MUX_CLIPS, 0);
+            
+            for (int i = 0; i < 8; i++)
+                gpio_set_level(gpio_states_index_to_io_num[i], !gpio_output_states[i]);
         }
+        
+        /* Alternate reading inputs and turning on the LEDs. */
+        input = !input;
+        vTaskDelay(1);
     }
 }
 
@@ -382,41 +412,32 @@ void app_main(void) {
     
     /* Zero-initialize the config structure. */
     gpio_config_t io_conf = {};
-    
-    /* Disable interrupt. */
-    io_conf.intr_type = GPIO_INTR_DISABLE;
+   
     /* Set as output mode. */
     io_conf.mode = GPIO_MODE_OUTPUT;
-    /* Bit mask of the pins that you want to set,e.g.GPIO18/19. */
+    /* Bit mask of the pins that you want to set as outputs. */
     io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    /* Disable pull-down mode. */
-    io_conf.pull_down_en = 0;
-    /* Disable pull-up mode. */
-    io_conf.pull_up_en = 0;
     /* Configure GPIO with the given settings. */
     gpio_config(&io_conf);
-    
-    /* Interrupt of falling edge. */
-    io_conf.intr_type = GPIO_INTR_NEGEDGE;
-    /* Bit mask of the pins, use GPIO4/5 here. */
+   
+    /* Bit mask of the pins, use inputs here. */
     io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
     /* Set as input mode. */
     io_conf.mode = GPIO_MODE_INPUT;
-    /* Enable pull-up mode. */
-    io_conf.pull_up_en = 1;
+    /* Enable pull-down mode. */
+    io_conf.pull_down_en = 1;
+    /* Configure GPIO with the given settings. */
     gpio_config(&io_conf);
     
-    /* Create a queue to handle gpio event from isr. */
-    gpio_evt_queue = xQueueCreate(10, sizeof(uint32_t));
-    /* Start gpio task. */
-    xTaskCreate(&gpio_get_states, "GPIO get states", 2048, NULL, 10, &gpio_get_states_task_handle);
+    /* Bit mask of the pins, use input/open drain output here. */
+    io_conf.pin_bit_mask = GPIO_INPUT_OUTPUT_PIN_SEL;
+    /* Set as input/output mode. */
+    io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
+    /* Configure GPIO with the given settings. */
+    gpio_config(&io_conf);
 
-    /* Install gpio isr service. */
-    gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT);
-    /* Hook isr handler for specific gpio pins. */
-    for (int i = 0; i < sizeof(gpio_states_index_to_io_num) / sizeof(*gpio_states_index_to_io_num); i++)
-        gpio_isr_handler_add(gpio_states_index_to_io_num[i],
-                             &gpio_isr_handler, (void *)(ptrdiff_t)gpio_states_index_to_io_num[i]);
+    /* Start gpio task. */
+    xTaskCreate(&gpio_update_states, "GPIO update states", 2048, NULL, 10, &gpio_update_states_task_handle);
     
     for (;;) {
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
@@ -481,7 +502,13 @@ void app_main(void) {
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
             even = !even;
         }
-        gpio_set_level(GPIO_OUTPUT_LED_STAR_R, 1);
+        
+        for (int i = 0; i < 8; i++)
+            if (gpio_output_states[i]) {
+                gpio_output_states[i] = 0;
+                gpio_output_states[(i + 1) & 7] = 1;
+                break;
+            }
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
     
