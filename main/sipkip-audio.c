@@ -176,7 +176,7 @@ static void gpio_update_states(void* arg) {
     }
 }
 
-static char *bda2str(uint8_t *bda, char *str, size_t size) {
+static inline char *bda2str(uint8_t *bda, char *str, size_t size) {
     if (bda == NULL || str == NULL || size < 18) {
         return NULL;
     }
@@ -187,12 +187,12 @@ static char *bda2str(uint8_t *bda, char *str, size_t size) {
     return str;
 }
 
-char *readable_file_size(size_t size /* in bytes */, char *buf) {
+static inline char *readable_file_size(size_t size /* in bytes */, char *buf) {
+    static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"};
     int i = 0;
-    const char* units[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"};
     size *= 1000;
     while (size >= 1024000) {
-        size /= 1024;
+        size >>= 10;
         i++;
     }
     sprintf(buf, "%lu.%lu %s", size / 1000, size % 1000, units[i]);

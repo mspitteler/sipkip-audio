@@ -12,7 +12,7 @@
 
 static const char *const TAG = "xmodem";
 
-static int xmodem_read_byte(int fd, TickType_t ticks) {
+static inline int xmodem_read_byte(int fd, TickType_t ticks) {
     unsigned char c;
     while (!read(fd, &c, 1)) {
         vTaskDelay(1);
@@ -57,7 +57,7 @@ static bool xmodem_check_buffer(int crc, const unsigned char *buf, ssize_t buf_s
     return false;
 }
 
-static void xmodem_flush_input(int fd) {
+static inline void xmodem_flush_input(int fd) {
     while (xmodem_read_byte(fd, ((XMODEM_READ_TIMEOUT_MS / portTICK_PERIOD_MS) * 3) >> 1) >= 0);
 }
 
