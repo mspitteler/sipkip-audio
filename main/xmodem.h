@@ -13,6 +13,6 @@
 #define XMODEM_READ_TIMEOUT_MS 1000
 #define XMODEM_MAX_RETRANSMIT 25
 
-esp_err_t xmodem_receiver_start(int spp_fd, const char *spiffs_filename);
+esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd);
 
 #endif /* XMODEM_H */

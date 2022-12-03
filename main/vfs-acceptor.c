@@ -76,6 +76,7 @@ void spp_read_handle(void *param) {
     int tries = 0, max_tries = 10;
 
     while (1) {
+        FILE *spiffs_file = NULL;
         char spiffs_filename[CONFIG_SPIFFS_OBJ_NAME_LEN + 1] = {0};
         while (memmem(spiffs_filename, CONFIG_SPIFFS_OBJ_NAME_LEN, SPIFFS_BASE_PATH"/",
                       strlen(SPIFFS_BASE_PATH"/")) != spiffs_filename && tries <= max_tries) {
@@ -86,8 +87,7 @@ void spp_read_handle(void *param) {
             }
             if (ret < 0) {
                 ESP_LOGE(TAG, "Failed to read from fd %d: %s", spp_fd, strerror(errno));
-                spp_wr_task_shut_down();
-                return;
+                goto exit;
             }
 
             tries++;
@@ -107,10 +107,20 @@ void spp_read_handle(void *param) {
         
         ESP_LOGI(TAG, "Detected valid filename: %s", spiffs_filename);
         
-        while (xmodem_receiver_start(spp_fd, spiffs_filename) != ESP_OK);
+        spiffs_file = fopen(spiffs_filename, "w");
+        if (!spiffs_file) {
+            ESP_LOGE(TAG, "Failed to open file %s: %s", spiffs_filename, strerror(errno));
+            goto exit;
+        }
+        while (xmodem_receiver_start(spp_fd, fileno(spiffs_file)) != ESP_OK);
+        /* Close file if applicable. */
+        if (spiffs_file)
+            fclose(spiffs_file);
+        
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
     
+exit:
     spp_wr_task_shut_down();
 }
 

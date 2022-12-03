@@ -1,5 +1,4 @@
 #include <string.h>
-#include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
 
@@ -61,8 +60,7 @@ static inline void xmodem_flush_input(int fd) {
     while (xmodem_read_byte(fd, ((XMODEM_READ_TIMEOUT_MS / portTICK_PERIOD_MS) * 3) >> 1) >= 0);
 }
 
-esp_err_t xmodem_receiver_start(int spp_fd, const char *spiffs_filename) {
-    FILE *spiffs_file = NULL;
+esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
     unsigned char *xmodem_buf = NULL;
     unsigned char *p;
     int xmodem_buf_size = 0, crc = 0;
@@ -71,13 +69,6 @@ esp_err_t xmodem_receiver_start(int spp_fd, const char *spiffs_filename) {
     int c;
     esp_err_t err = ESP_OK;
     int retry, retransmit = XMODEM_MAX_RETRANSMIT;
-    
-    spiffs_file = fopen(spiffs_filename, "w");
-    if (!spiffs_file) {
-        ESP_LOGE(TAG, "Failed to open file %s: %s", spiffs_filename, strerror(errno));
-        err = ESP_FAIL;
-        goto exit;
-    }
    
     for (;;) {
         for (retry = 0; retry < 16; ++retry) {
@@ -106,7 +97,7 @@ esp_err_t xmodem_receiver_start(int spp_fd, const char *spiffs_filename) {
                     xmodem_buf_size = 1024;
                     goto start_receive;
                 case XMODEM_EOT:
-                    ESP_LOGI(TAG, "Received file %s successfully", spiffs_filename);
+                    ESP_LOGI(TAG, "Received file with fd %d successfully", spiffs_fd);
                     xmodem_flush_input(spp_fd);
                     write(spp_fd, (char []) {XMODEM_ACK}, 1);
                     goto exit; /* normal end */
@@ -170,7 +161,7 @@ esp_err_t xmodem_receiver_start(int spp_fd, const char *spiffs_filename) {
             (xmodem_buf[1] == packet_number || xmodem_buf[1] == (unsigned char)packet_number - 1) &&
             xmodem_check_buffer(crc, &xmodem_buf[3], xmodem_buf_size)) {
             if (xmodem_buf[1] == packet_number) {
-                fwrite(&xmodem_buf[3], xmodem_buf_size, 1, spiffs_file);
+                write(spiffs_fd, &xmodem_buf[3], xmodem_buf_size);
                 ++packet_number;
                 retransmit = XMODEM_MAX_RETRANSMIT + 1;
             }
@@ -193,9 +184,7 @@ esp_err_t xmodem_receiver_start(int spp_fd, const char *spiffs_filename) {
         write(spp_fd, (char []) {XMODEM_NAK}, 1);
     }
 exit:
-    /* Close file and free memory if apliccable. */
-    if (spiffs_file)
-        fclose(spiffs_file);
+    /* Free memory if apliccable. */
     if (xmodem_buf)
         free(xmodem_buf);
     
