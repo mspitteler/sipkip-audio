@@ -26,7 +26,7 @@
 #define GPIO_INPUT_TRIANGLE_R      GPIO_NUM_18
 #define GPIO_INPUT_STAR_R          GPIO_NUM_16
 /* This is the beak button. */
-#define GPIO_INPUT_BEAK            GPIO_NUM_33
+#define GPIO_INPUT_BEAK            GPIO_NUM_15
 /* These are the inputs for the switch. */
 #define GPIO_INPUT_SWITCH_LEARN    GPIO_NUM_34
 #define GPIO_INPUT_SWITCH_MUSIC    GPIO_NUM_35
