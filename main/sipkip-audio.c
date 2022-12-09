@@ -30,6 +30,7 @@
 #include "esp_bt_main.h"
 #include "esp_bt_device.h"
 #include "esp_spp_api.h"
+#include "esp_random.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
 #include "driver/dac_continuous.h"
@@ -542,8 +543,13 @@ void app_main(void) {
             even = !even;
         }
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
-            FILE *spiffs_file_opus = fopen("/spiffs/1.opus", "r");
-            FILE *spiffs_file_opus_packets = fopen("/spiffs/1.opus_packets", "r");
+            char spiffs_file_opus_name[16];
+            char spiffs_file_opus_packets_name[24];
+            
+            sprintf(spiffs_file_opus_name, "/spiffs/%d.opus", (esp_random() & 3) + 1);
+            sprintf(spiffs_file_opus_packets_name, "%s%s", spiffs_file_opus_name, "_packets");
+            FILE *spiffs_file_opus = fopen(spiffs_file_opus_name, "r");
+            FILE *spiffs_file_opus_packets = fopen(spiffs_file_opus_packets_name, "r");
             unsigned int spiffs_file_opus_packets_len;
            
             if (spiffs_file_opus && spiffs_file_opus_packets) {
@@ -552,6 +558,11 @@ void app_main(void) {
                 fseek(spiffs_file_opus_packets, 0, SEEK_SET);
                 DAC_WRITE_OPUS(spiffs_file_opus, file, pcm_bytes, decoder, &dac_data);
             }
+            
+            if (spiffs_file_opus)
+                fclose(spiffs_file_opus);
+            if (spiffs_file_opus_packets)
+                fclose(spiffs_file_opus_packets);
                 
             if (even)
                 DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, pcm_bytes, 
