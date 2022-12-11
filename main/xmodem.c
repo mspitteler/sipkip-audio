@@ -72,7 +72,7 @@ esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
    
     for (;;) {
         for (retry = 0; retry < 16; ++retry) {
-            ESP_LOGI(TAG, "Trying to receive for the %dth time", retry);
+            ESP_LOGI(TAG, "Trying to receive packet number %d for the %dth time", packet_number, retry);
             if (trychar)
                 write(spp_fd, &trychar, 1);
             
@@ -84,7 +84,8 @@ esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
                         err = ESP_FAIL;
                         goto exit;
                     }
-                    ESP_LOGI(TAG, "Detected classic XMODEM transmitter");
+                    if (!xmodem_buf_size)
+                        ESP_LOGI(TAG, "Detected classic XMODEM transmitter");
                     xmodem_buf_size = 128;
                     goto start_receive;
                 case XMODEM_STX:
@@ -93,7 +94,8 @@ esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
                         err = ESP_FAIL;
                         goto exit;
                     }
-                    ESP_LOGI(TAG, "Detected XMODEM 1K transmitter");
+                    if (!xmodem_buf_size)
+                        ESP_LOGI(TAG, "Detected XMODEM 1K transmitter");
                     xmodem_buf_size = 1024;
                     goto start_receive;
                 case XMODEM_EOT:
