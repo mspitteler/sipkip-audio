@@ -48,13 +48,13 @@
 
 #define ESP_INTR_FLAG_DEFAULT 0
 
-#define DAC_WRITE_OPUS(opus_name, mem_or_file, pcm_bytes, decoder, dac_data)                                \
+#define DAC_WRITE_OPUS(opus_name, mem_or_file, decoder, dac_data)                                           \
     dac_write_opus((struct opus_mem_or_file) {                                                              \
         .is_##mem_or_file = true,                                                                           \
         .mem_or_file.opus = opus_name,                                                                      \
         .mem_or_file.opus_packets = opus_name##_packets,                                                    \
         .mem_or_file.opus_packets_len = opus_name##_packets_len                                             \
-    }, pcm_bytes, decoder, dac_data)
+    }, decoder, dac_data)
 
 #define SPIFFS_CHECK_AT_BOOT 0
 #define SPIFFS_BASE_PATH "/spiffs"
