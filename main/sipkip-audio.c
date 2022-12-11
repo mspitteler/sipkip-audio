@@ -46,6 +46,7 @@ static const char *const TAG = "sipkip-audio";
 static TaskHandle_t gpio_update_states_task_handle = NULL;
 static TaskHandle_t dac_write_data_task_handle = NULL;
 
+static volatile bool *gpio_states_changed = NULL;
 static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static volatile bool gpio_output_states[] = {1, 0, 0, 0, 0, 0, 0, 0};
 
@@ -68,8 +69,8 @@ struct dac_data {
     dac_continuous_handle_t handle;
     uint8_t *data;
     size_t data_size;
-    volatile int buffer_full;
-    volatile int exit;
+    volatile bool buffer_full;
+    volatile bool exit;
 };
 
 struct opus_mem_or_file {
@@ -103,15 +104,12 @@ static void dac_write_data_synchronously(void *data) {
 static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDecoder *decoder,
                                 struct dac_data *dac_data) {
     opus_int16 out[OPUS_MAX_FRAME_SIZE];
+    bool suspended = true;
 
-    dac_data->exit = 0;
     dac_data->buffer_full = 1;
-    
-    if (dac_write_data_task_handle)
-        vTaskResume(dac_write_data_task_handle);
 
     for (int packet_size_index = 0, packet_size_total = 0, packet_size = 0;
-         packet_size_index <= opus_mem_or_file.opus_packets_len / sizeof(short);
+         packet_size_index <= opus_mem_or_file.opus_packets_len / sizeof(short) && !dac_data->exit;
          packet_size = (opus_mem_or_file.is_mem ? ((short *)opus_mem_or_file.mem.opus_packets)[packet_size_index] : 
             (fgetc(opus_mem_or_file.file.opus_packets) & 0xFF) | (fgetc(opus_mem_or_file.file.opus_packets) << 8)), 
             packet_size_index++) {
@@ -157,7 +155,7 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
             return ESP_FAIL;
         }
        
-        while (dac_write_data_task_handle && dac_data->buffer_full)
+        while (dac_write_data_task_handle && !suspended && dac_data->buffer_full)
             vTaskDelay(1);
         /* Convert to 8-bit. */
         for (int i = 0; i < frame_size; i++)
@@ -166,9 +164,13 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
         dac_data->data_size = sizeof(*dac_data->data) * frame_size;
         dac_data->buffer_full = 1;
         
-        if (!dac_write_data_task_handle)
+        if (!dac_write_data_task_handle) {
             xTaskCreate(&dac_write_data_synchronously, "DAC write data", 2048, dac_data, 10, 
                         &dac_write_data_task_handle);
+        } else if (suspended) {
+            vTaskResume(dac_write_data_task_handle);
+            suspended = false;
+        }
         
         packet_size_total += packet_size;
     }
@@ -178,7 +180,9 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
     return ESP_OK;
 }
 
-static void gpio_update_states(void* arg) {
+static void gpio_update_states(void *arg) {
+    static bool states[17];
+    void (*on_changed)(bool (*)[17]) = arg;
     bool input = false, gpio_mux_clips = false;
     
     for (;;) {
@@ -196,13 +200,21 @@ static void gpio_update_states(void* arg) {
             gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 0);
             gpio_set_level(GPIO_OUTPUT_LED_RIGHT, 0);
             
-            for (int i = 0; i < 8; i++) {
+            for (int i = 0; i < sizeof(states); i++) {
                 int io_num = gpio_states_index_to_io_num[i];
-                gpio_pulldown_en(io_num);
-                gpio_states[i + ((uint8_t)gpio_mux_clips << 3)] = gpio_get_level(io_num);
-                gpio_pulldown_dis(io_num);
+                int level;
+                if (i >= 8 && i < 16) /* These are not real GPIO inputs. */
+                    continue;
+
+                if (i < 16)
+                    gpio_pulldown_en(io_num);
+                if (states[i + (i == 16 ? 0 : ((uint8_t)gpio_mux_clips << 3))] != (level = gpio_get_level(io_num)))
+                    on_changed(&states);
+                
+                states[i + (i == 16 ? 0 : ((uint8_t)gpio_mux_clips << 3))] = level;
+                if (i < 16)
+                    gpio_pulldown_dis(io_num);
             }
-            gpio_states[16] = gpio_get_level(gpio_states_index_to_io_num[16]);
         } else {
             gpio_set_level(GPIO_OUTPUT_LED_LEFT, 1);
             gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 1);
@@ -217,8 +229,15 @@ static void gpio_update_states(void* arg) {
         
         /* Alternate reading inputs and turning on the LEDs. */
         input = !input;
-        vTaskDelay(1);
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
+}
+
+static void on_gpio_states_changed(bool (*states)[17]) {
+    for (int i = 0; i < sizeof(*states); i++)
+        gpio_states[i] = (*states)[i];
+    if (gpio_states_changed)
+        *gpio_states_changed = true;
 }
 
 static inline char *bda2str(uint8_t *bda, char *str, size_t size) {
@@ -450,6 +469,8 @@ void app_main(void) {
         .handle = dac_handle,
         .data = pcm_bytes,
     };
+    /* Set dac_data->exit to true when one of the gpio states has changed. */
+    gpio_states_changed = &dac_data.exit;
     
     bool even = 0;
     DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, 
@@ -482,9 +503,11 @@ void app_main(void) {
     gpio_config(&io_conf);
 
     /* Start gpio task. */
-    xTaskCreate(&gpio_update_states, "GPIO update states", 2048, NULL, 10, &gpio_update_states_task_handle);
+    xTaskCreate(&gpio_update_states, "GPIO update states", 2048, &on_gpio_states_changed, 10, 
+                &gpio_update_states_task_handle);
     
     for (;;) {
+        *gpio_states_changed = false;
         if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
             gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]]) {
             DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, mem, decoder, &dac_data);
