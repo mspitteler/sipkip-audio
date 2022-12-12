@@ -95,8 +95,11 @@ static void dac_write_data_synchronously(void *data) {
     ESP_LOGI(TAG, "Audio size %lu bytes, played at frequency %d Hz synchronously", dac_data->data_size, 
              OPUS_SAMPLE_RATE);
     for (;;) {
-        ESP_ERROR_CHECK(dac_continuous_write(dac_data->handle, dac_data->data, dac_data->data_size, NULL, -1));
-        dac_data->buffer_full = 0;
+        if (dac_data->buffer_full) {
+            ESP_ERROR_CHECK(dac_continuous_write(dac_data->handle, dac_data->data, dac_data->data_size, NULL, -1));
+            dac_data->buffer_full = 0;
+        }
+        vTaskDelay(2 / portTICK_PERIOD_MS);
     }
 }
 
