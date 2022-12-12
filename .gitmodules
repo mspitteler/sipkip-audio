@@ -1,3 +1,6 @@
 [submodule "components/esp-libopus"]
 	path = components/esp-libopus
 	url = https://github.com/XasWorks/esp-libopus.git
+[submodule "components/libglob"]
+	path = components/libglob
+	url = https://github.com/void-linux/libglob.git

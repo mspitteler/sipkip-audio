@@ -35,6 +35,7 @@
 
 #include "audio.h"
 #include "opus.h"
+#include "glob.h"
 #include "spp-task.h"
 #include "vfs-acceptor.h"
 #include "sipkip-audio.h"
@@ -297,6 +298,135 @@ static void list_files(const char *const path) {
     closedir(dir);
 }
 
+static int play_spiffs_opus_file(OpusDecoder *decoder, struct dac_data *dac_data, const char *starts_with) {
+    glob_t glob_buf;
+    char *glob_path;
+    char opus_path[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    char opus_packets_path[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    
+    sprintf(opus_path, "%s-*.opus", starts_with);
+    switch (g_glob(opus_path, GLOB_ERR, NULL, &glob_buf)) {
+        case GLOB_NOMATCH:
+            ESP_LOGW(TAG, "No files matching pattern \"%s\" present on SPIFFS partition", opus_path);
+            sprintf(opus_path, "%s.opus", starts_with);
+            ESP_LOGW(TAG, "Falling back to \"%s\"", opus_path);
+            break;
+        /* Fatal errors; return. */
+        case GLOB_NOSPACE: ESP_LOGE(TAG, "No memory left for executing glob()"); return -1;
+        case GLOB_ABORTED: ESP_LOGE(TAG, "Read error in glob() function"); return -1;
+    }
+    if (glob_buf.gl_pathc)
+        glob_path = glob_buf.gl_pathv[esp_random() % glob_buf.gl_pathc]; /* Take a random entry from gl_pathv. */
+    else /* When no files matching the specified pattern were found. */
+        glob_path = opus_path;
+    
+    sprintf(opus_packets_path, "%s_packets", glob_path);
+    FILE *spiffs_file_opus = fopen(glob_path, "r");
+    FILE *spiffs_file_opus_packets = fopen(opus_packets_path, "r");
+    g_globfree(&glob_buf);
+    unsigned int spiffs_file_opus_packets_len;
+    
+    if (spiffs_file_opus && spiffs_file_opus_packets) {
+        fseek(spiffs_file_opus_packets, 0, SEEK_END);
+        spiffs_file_opus_packets_len = ftell(spiffs_file_opus_packets);
+        fseek(spiffs_file_opus_packets, 0, SEEK_SET);
+        DAC_WRITE_OPUS(spiffs_file_opus, file, decoder, dac_data);
+    } else {
+        ESP_LOGW(TAG, "Failed to open \"%s\" or \"%s\"", glob_path, opus_packets_path);
+    }
+    
+    if (spiffs_file_opus)
+        fclose(spiffs_file_opus);
+    if (spiffs_file_opus_packets)
+        fclose(spiffs_file_opus_packets);
+    
+    return 0;
+}
+
+static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
+    static bool even = false;
+    
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]]) {
+        DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, mem, decoder, dac_data);
+        if (even)
+            DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, mem, decoder, dac_data);
+        else
+            DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, mem, decoder, dac_data);
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]] = 0;
+        even = !even;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L] + 8] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R] + 8]) {
+        play_spiffs_opus_file(decoder, dac_data, "/spiffs/1");
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L] + 8] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R] + 8] = 0;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]]) {
+        DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, mem, decoder, dac_data);
+        if (even)
+            DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, mem, decoder, dac_data);
+        else
+            DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, mem, decoder, dac_data);
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]] = 0;
+        even = !even;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L] + 8] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R] + 8]) {
+        play_spiffs_opus_file(decoder, dac_data, "/spiffs/2");
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L] + 8] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R] + 8] = 0;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]]) {
+        DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, mem, decoder, dac_data);
+        if (even)
+            DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, mem, decoder, dac_data);
+        else
+            DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, mem, decoder, dac_data);
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]] = 0;
+        even = !even;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L] + 8] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R] + 8]) {
+        play_spiffs_opus_file(decoder, dac_data, "/spiffs/3");
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L] + 8] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R] + 8] = 0;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]]) {
+        DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, mem, decoder, dac_data);
+        if (even)
+            DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, mem, decoder, dac_data);
+        else
+            DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, mem, decoder, dac_data);
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]] = 0;
+        even = !even;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L] + 8] || 
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R] + 8]) {
+        play_spiffs_opus_file(decoder, dac_data, "/spiffs/4");
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L] + 8] = 0;
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R] + 8] = 0;
+    }
+    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
+        play_spiffs_opus_file(decoder, dac_data, "/spiffs/b");
+        if (even)
+            DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
+                            decoder, dac_data);
+        else
+            DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, mem, 
+                            decoder, dac_data);
+        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
+        even = !even;
+    }
+}
+
 void app_main(void) {
     OpusDecoder *decoder;
     int err;
@@ -462,8 +592,7 @@ void app_main(void) {
     };
     /* Set dac_data->exit to true when one of the gpio states has changed. */
     gpio_states_changed = &dac_data.exit;
-    
-    bool even = 0;
+   
     DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, 
                    decoder, &dac_data);
     
@@ -499,81 +628,7 @@ void app_main(void) {
     
     for (;;) {
         *gpio_states_changed = false;
-        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]]) {
-            DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, mem, decoder, &dac_data);
-            if (even)
-                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, mem, decoder, &dac_data);
-            else
-                DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, mem, decoder, &dac_data);
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] = 0;
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]] = 0;
-            even = !even;
-        }
-        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] || 
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]]) {
-            DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, mem, decoder, &dac_data);
-            if (even)
-                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, mem, decoder, &dac_data);
-            else
-                DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, mem, decoder, &dac_data);
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] = 0;
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]] = 0;
-            even = !even;
-        }
-        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] || 
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]]) {
-            DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, mem, decoder, &dac_data);
-            if (even)
-                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, mem, decoder, &dac_data);
-            else
-                DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, mem, decoder, &dac_data);
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] = 0;
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]] = 0;
-            even = !even;
-        }
-        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] || 
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]]) {
-            DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, mem, decoder, &dac_data);
-            if (even)
-                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, mem, decoder, &dac_data);
-            else
-                DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, mem, decoder, &dac_data);
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] = 0;
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]] = 0;
-            even = !even;
-        }
-        if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
-            char spiffs_file_opus_name[16];
-            char spiffs_file_opus_packets_name[24];
-            
-            sprintf(spiffs_file_opus_name, "/spiffs/%d.opus", (esp_random() & 3) + 1);
-            sprintf(spiffs_file_opus_packets_name, "%s%s", spiffs_file_opus_name, "_packets");
-            FILE *spiffs_file_opus = fopen(spiffs_file_opus_name, "r");
-            FILE *spiffs_file_opus_packets = fopen(spiffs_file_opus_packets_name, "r");
-            unsigned int spiffs_file_opus_packets_len;
-           
-            if (spiffs_file_opus && spiffs_file_opus_packets) {
-                fseek(spiffs_file_opus_packets, 0, SEEK_END);
-                spiffs_file_opus_packets_len = ftell(spiffs_file_opus_packets);
-                fseek(spiffs_file_opus_packets, 0, SEEK_SET);
-                DAC_WRITE_OPUS(spiffs_file_opus, file, decoder, &dac_data);
-            }
-            
-            if (spiffs_file_opus)
-                fclose(spiffs_file_opus);
-            if (spiffs_file_opus_packets)
-                fclose(spiffs_file_opus_packets);
-                
-            if (even)
-                DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
-                               decoder, &dac_data);
-            else
-                DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, mem, 
-                               decoder, &dac_data);
-            gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
-            even = !even;
-        }
+        play_opus_files(decoder, &dac_data);
         
         for (int i = 0; i < 8; i++)
             if (gpio_output_states[i]) {
