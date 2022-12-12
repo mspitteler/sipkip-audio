@@ -155,7 +155,7 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
         }
        
         while (dac_write_data_task_handle && !suspended && dac_data->buffer_full)
-            vTaskDelay(1);
+            vTaskDelay(10 / portTICK_PERIOD_MS);
         /* Convert to 8-bit. */
         for (int i = 0; i < frame_size; i++)
             dac_data->data[i] = ((out[i] + 32768) >> 8) & 0xFF;
@@ -228,7 +228,7 @@ static void gpio_update_states(void *arg) {
         
         /* Alternate reading inputs and turning on the LEDs. */
         input = !input;
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(2 / portTICK_PERIOD_MS);
     }
 }
 

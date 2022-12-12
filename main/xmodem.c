@@ -14,8 +14,8 @@ static const char *const TAG = "xmodem";
 static inline int xmodem_read_byte(int fd, TickType_t ticks) {
     unsigned char c;
     while (!read(fd, &c, 1)) {
-        vTaskDelay(1);
-        if (ticks-- <= 0)
+        vTaskDelay(50 / portTICK_PERIOD_MS);
+        if (ticks -= (50 / portTICK_PERIOD_MS) <= 0)
             return -1;
     }
     return c;
