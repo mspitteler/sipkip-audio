@@ -3,7 +3,6 @@
 #include <string.h>
 #include <inttypes.h>
 #include <time.h>
-#include <pthread.h>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -19,7 +18,6 @@
 #include "esp_flash.h"
 #include "esp_timer.h"
 #include "esp_check.h"
-#include "esp_pthread.h"
 #include "esp_task_wdt.h"
 #include "esp_spiffs.h"
 #include "esp_log.h"
@@ -300,8 +298,6 @@ static void list_files(const char *const path) {
 }
 
 void app_main(void) {
-    esp_pthread_cfg_t cfg;
-   
     OpusDecoder *decoder;
     int err;
 
@@ -459,11 +455,6 @@ void app_main(void) {
         ESP_LOGE(TAG, "Failed to allocate memory for dac output buffer\n");
         return;
     }
-    
-    cfg = esp_pthread_get_default_config();
-    cfg.pin_to_core = 1; /* Pin to core 1, since the main app will run on core 0. */
-    cfg.prio = 0;
-    ESP_ERROR_CHECK(esp_pthread_set_cfg(&cfg));
 
     struct dac_data dac_data = {
         .handle = dac_handle,
