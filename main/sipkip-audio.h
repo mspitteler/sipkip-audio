@@ -58,5 +58,6 @@
 
 #define SPIFFS_CHECK_AT_BOOT 0
 #define SPIFFS_BASE_PATH "/spiffs"
+#define SPIFFS_FORMAT_BEAK_PRESSED_TIMEOUT 5000
 
 #endif /* SIPKIP_AUDIO_H */

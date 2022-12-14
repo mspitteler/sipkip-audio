@@ -625,6 +625,16 @@ void app_main(void) {
     /* Configure GPIO with the given settings. */
     gpio_config(&io_conf);
 
+    /* Format the spiffs partition if the beak button is pressed for 5 seconds. */
+    if (gpio_get_level(GPIO_INPUT_BEAK)) {
+        vTaskDelay(SPIFFS_FORMAT_BEAK_PRESSED_TIMEOUT / portTICK_PERIOD_MS);
+        if (gpio_get_level(GPIO_INPUT_BEAK)) {
+            ESP_LOGW(TAG, "Pressed the beak button for %d seconds. Formatting...",
+                     SPIFFS_FORMAT_BEAK_PRESSED_TIMEOUT / 1000);
+            esp_spiffs_format(conf.partition_label);
+        }
+    }
+
     /* Start gpio task. */
     xTaskCreate(&gpio_update_states, "GPIO update states", 2048, &on_gpio_states_changed, 10, 
                 &gpio_update_states_task_handle);
