@@ -8,7 +8,7 @@
 /*The frame size is hardcoded for this sample code but it doesn't have to be*/
 #define OPUS_FRAME_SIZE 960
 #define OPUS_SAMPLE_RATE 48000
-#define OPUS_BITRATE 24000
+#define OPUS_BITRATE 16000
 
 #define OPUS_MAX_FRAME_SIZE 6*960
 #define OPUS_MAX_PACKET_SIZE (3*1276)
