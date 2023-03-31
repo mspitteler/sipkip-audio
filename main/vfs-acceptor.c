@@ -138,32 +138,32 @@ static esp_err_t command_help(int argc, char **argv) {
 }
 
 static esp_err_t command_rx(int argc, char **argv) {
-    int spiffs_fd;
+    int littlefs_fd;
     bool remove_file = false;
     
     if (argc != 2)
         /* Wrong amount of arguments, or first argument isn't a path. */
         return ESP_ERR_INVALID_ARG;
 
-    if (strstr(argv[1], SPIFFS_BASE_PATH"/") != argv[1]) {
-        dprintf(spp_fd, "Invalid file name: %s, doesn't start with %s\n", argv[1], SPIFFS_BASE_PATH"/");
+    if (strstr(argv[1], LITTLEFS_BASE_PATH"/") != argv[1]) {
+        dprintf(spp_fd, "Invalid file name: %s, doesn't start with %s\n", argv[1], LITTLEFS_BASE_PATH"/");
         return ESP_OK;
     }
     ESP_LOGI(TAG, "Detected valid filename: %s", argv[1]);
 
-    spiffs_fd = open(argv[1], O_WRONLY | O_CREAT | O_EXCL);
-    if (spiffs_fd < 0) {
+    littlefs_fd = open(argv[1], O_WRONLY | O_CREAT | O_EXCL);
+    if (littlefs_fd < 0) {
         dprintf(spp_fd, "Failed to open file %s: %s\n", argv[1], strerror(errno));
         return ESP_OK;
     }
 
-    if (xmodem_receiver_start(spp_fd, spiffs_fd) != ESP_OK) {
+    if (xmodem_receiver_start(spp_fd, littlefs_fd) != ESP_OK) {
         dprintf(spp_fd, "Failed to receive file %s using XMODEM\n", argv[1]);
         remove_file = true;
     }
 
     /* Close file, and unlink if the transfer failed. */
-    close(spiffs_fd);
+    close(littlefs_fd);
     if (remove_file)
         command_rm(argc, argv);
     return ESP_OK;
@@ -260,7 +260,7 @@ static esp_err_t command_rmdir(int argc, char **argv) {
 }
 
 static esp_err_t command_ls(int argc, char **argv) {
-    char buffer[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    char buffer[CONFIG_LITTLEFS_OBJ_NAME_LEN];
     if (argc == 1) {
         if (!getcwd(buffer, sizeof(buffer) / sizeof(*buffer))) {
             dprintf(spp_fd, "Couldn't determine current working directory: %s!\n", strerror(errno));
@@ -303,7 +303,7 @@ static esp_err_t command_cwd(int argc, char **argv) {
 }
 
 static esp_err_t command_pwd(int argc, char **argv) {
-    char buffer[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    char buffer[CONFIG_LITTLEFS_OBJ_NAME_LEN];
     
     if (argc != 1)
         return ESP_ERR_INVALID_ARG;

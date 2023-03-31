@@ -63,7 +63,7 @@ static inline char *readable_file_size(size_t size /* in bytes */, char *buf) {
 static inline int copy_file(const char *src, const char *dst) {
     FILE *in = NULL, *out = NULL;
     size_t in_size, out_size;
-    char buf[CONFIG_SPIFFS_PAGE_SIZE];
+    char buf[CONFIG_LITTLEFS_PAGE_SIZE];
     int ret_val = 0;
     
     in = fopen(src, "rb");

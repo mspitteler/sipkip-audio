@@ -19,7 +19,7 @@
 #include "esp_timer.h"
 #include "esp_check.h"
 #include "esp_task_wdt.h"
-#include "esp_spiffs.h"
+#include "esp_littlefs.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -246,16 +246,27 @@ static void on_gpio_states_changed(bool (*states)[17]) {
 /**
  * Lists all files and sub-directories at given path.
  */
-static void list_files(const char *const path) {
+static void list_file_tree(const char *const path, int depth) {
     struct dirent *dp;
     DIR *dir = opendir(path);
+    static bool last_printed[32] = {false};
 
     /* Unable to open directory stream. */
-    if (!dir) 
+    if (!dir) {
+        ESP_LOGE(TAG, "Failed to open directory %s: %s!", path, strerror(errno));
         return; 
+    }
 
     while ((dp = readdir(dir)) != NULL) {
-        char d_path[CONFIG_SPIFFS_OBJ_NAME_LEN]; /* Here I am using sprintf which is safer than strcat. */
+        char d_path[CONFIG_LITTLEFS_OBJ_NAME_LEN]; /* Here I am using sprintf which is safer than strcat. */
+        long dir_loc = telldir(dir);
+        struct dirent *tmp_dp;
+        do {
+            tmp_dp = readdir(dir);
+        } while (tmp_dp && (!strcmp(tmp_dp->d_name, ".") || !strcmp(tmp_dp->d_name, "..")));
+        last_printed[depth] = !tmp_dp;
+        seekdir(dir, dir_loc);
+        
         sprintf(d_path, "%s/%s", path, dp->d_name);
         
         if (dp->d_type != DT_DIR) {
@@ -267,11 +278,15 @@ static void list_files(const char *const path) {
                 continue;
             }
 
-            ESP_LOGI(TAG, LOG_COLOR(LOG_COLOR_BLUE)"%s,\t%s"LOG_RESET_COLOR, d_path, 
-                     readable_file_size(st.st_size, buf));
+            for (int i = 0; i < depth; i++)
+                printf("%c   ", last_printed[i] ? ' ' : '|');
+            printf("%c-"LOG_COLOR(LOG_COLOR_CYAN)"%s"LOG_RESET_COLOR", %s\n", tmp_dp ? '|' : '`',
+                   dp->d_name, readable_file_size(st.st_size, buf));
         } else if (strcmp(dp->d_name, ".") && strcmp(dp->d_name, "..")) {
-            ESP_LOGI(TAG, LOG_COLOR(LOG_COLOR_GREEN)"%s\n"LOG_RESET_COLOR, d_path);
-            list_files(d_path); /* Recall with the new path. */
+            for (int i = 0; i < depth; i++)
+                printf("%c   ", last_printed[i] ? ' ' : '|');
+            printf("%c-"LOG_COLOR(LOG_COLOR_BLUE)"%s"LOG_RESET_COLOR"\n", tmp_dp ? '|' : '`', dp->d_name);
+            list_file_tree(d_path, depth + 1); /* Recall with the new path. */
         }
     }
 
@@ -279,16 +294,16 @@ static void list_files(const char *const path) {
     closedir(dir);
 }
 
-static int play_spiffs_opus_file(OpusDecoder *decoder, struct dac_data *dac_data, const char *starts_with) {
+static int play_littlefs_opus_file(OpusDecoder *decoder, struct dac_data *dac_data, const char *starts_with) {
     glob_t glob_buf;
     char *glob_path;
-    char opus_path[CONFIG_SPIFFS_OBJ_NAME_LEN];
-    char opus_packets_path[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    char opus_path[CONFIG_LITTLEFS_OBJ_NAME_LEN];
+    char opus_packets_path[CONFIG_LITTLEFS_OBJ_NAME_LEN];
     
     sprintf(opus_path, "%s-*.opus", starts_with);
     switch (g_glob(opus_path, GLOB_ERR, NULL, &glob_buf)) {
         case GLOB_NOMATCH:
-            ESP_LOGW(TAG, "No files matching pattern \"%s\" present on SPIFFS partition", opus_path);
+            ESP_LOGW(TAG, "No files matching pattern \"%s\" present on LITTLEFS partition", opus_path);
             sprintf(opus_path, "%s.opus", starts_with);
             ESP_LOGW(TAG, "Falling back to \"%s\"", opus_path);
             break;
@@ -302,24 +317,24 @@ static int play_spiffs_opus_file(OpusDecoder *decoder, struct dac_data *dac_data
         glob_path = opus_path;
     
     sprintf(opus_packets_path, "%s_packets", glob_path);
-    FILE *spiffs_file_opus = fopen(glob_path, "r");
-    FILE *spiffs_file_opus_packets = fopen(opus_packets_path, "r");
+    FILE *littlefs_file_opus = fopen(glob_path, "r");
+    FILE *littlefs_file_opus_packets = fopen(opus_packets_path, "r");
     g_globfree(&glob_buf);
-    unsigned int spiffs_file_opus_packets_len;
+    unsigned int littlefs_file_opus_packets_len;
     
-    if (spiffs_file_opus && spiffs_file_opus_packets) {
-        fseek(spiffs_file_opus_packets, 0, SEEK_END);
-        spiffs_file_opus_packets_len = ftell(spiffs_file_opus_packets);
-        fseek(spiffs_file_opus_packets, 0, SEEK_SET);
-        DAC_WRITE_OPUS(spiffs_file_opus, file, decoder, dac_data);
+    if (littlefs_file_opus && littlefs_file_opus_packets) {
+        fseek(littlefs_file_opus_packets, 0, SEEK_END);
+        littlefs_file_opus_packets_len = ftell(littlefs_file_opus_packets);
+        fseek(littlefs_file_opus_packets, 0, SEEK_SET);
+        DAC_WRITE_OPUS(littlefs_file_opus, file, decoder, dac_data);
     } else {
         ESP_LOGW(TAG, "Failed to open \"%s\" or \"%s\"", glob_path, opus_packets_path);
     }
     
-    if (spiffs_file_opus)
-        fclose(spiffs_file_opus);
-    if (spiffs_file_opus_packets)
-        fclose(spiffs_file_opus_packets);
+    if (littlefs_file_opus)
+        fclose(littlefs_file_opus);
+    if (littlefs_file_opus_packets)
+        fclose(littlefs_file_opus_packets);
     
     return 0;
 }
@@ -340,7 +355,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L] + 8] || 
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R] + 8]) {
-        play_spiffs_opus_file(decoder, dac_data, "/spiffs/1");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/1");
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L] + 8] = 0;
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R] + 8] = 0;
     }
@@ -357,7 +372,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L] + 8] || 
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R] + 8]) {
-        play_spiffs_opus_file(decoder, dac_data, "/spiffs/2");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/2");
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L] + 8] = 0;
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R] + 8] = 0;
     }
@@ -374,7 +389,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L] + 8] || 
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R] + 8]) {
-        play_spiffs_opus_file(decoder, dac_data, "/spiffs/3");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/3");
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L] + 8] = 0;
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R] + 8] = 0;
     }
@@ -391,12 +406,12 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L] + 8] || 
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R] + 8]) {
-        play_spiffs_opus_file(decoder, dac_data, "/spiffs/4");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/4");
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L] + 8] = 0;
         gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R] + 8] = 0;
     }
     if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
-        play_spiffs_opus_file(decoder, dac_data, "/spiffs/b");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/b");
         if (even)
             DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
                             decoder, dac_data);
@@ -434,54 +449,54 @@ void app_main(void) {
         .chan_mode = DAC_CHANNEL_MODE_SIMUL,
     };
     
-    esp_vfs_spiffs_conf_t conf = {
-        .base_path = SPIFFS_BASE_PATH,
-        .partition_label = NULL,
-        .max_files = 5,
+    esp_vfs_littlefs_conf_t conf = {
+        .base_path = LITTLEFS_BASE_PATH,
+        .partition_label = "storage", /* See `partitions.csv' */
         .format_if_mount_failed = true
     };
     
-    ESP_LOGI(TAG, "Initializing SPIFFS");
+    ESP_LOGI(TAG, "Initializing LITTLEFS");
     
     /**
-     * Use settings defined above to initialize and mount SPIFFS filesystem.
-     * NOTE: esp_vfs_spiffs_register is an all-in-one convenience function.
+     * Use settings defined above to initialize and mount LITTLEFS filesystem.
+     * NOTE: esp_vfs_littlefs_register is an all-in-one convenience function.
      */
-    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    esp_err_t ret = esp_vfs_littlefs_register(&conf);
 
     if (ret != ESP_OK) {
         if (ret == ESP_FAIL) {
             ESP_LOGE(TAG, "Failed to mount or format filesystem");
         } else if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE(TAG, "Failed to find SPIFFS partition");
+            ESP_LOGE(TAG, "Failed to find LITTLEFS partition");
         } else {
-            ESP_LOGE(TAG, "Failed to initialize SPIFFS (%s)", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to initialize LITTLEFS (%s)", esp_err_to_name(ret));
         }
         return;
     }
 
-#if (SPIFFS_CHECK_AT_BOOT == true)
-    ESP_LOGI(TAG, "Performing SPIFFS_check().");
-    ret = esp_spiffs_check(conf.partition_label);
+#if (LITTLEFS_CHECK_AT_BOOT == true)
+    ESP_LOGI(TAG, "Performing LITTLEFS_check().");
+    ret = esp_littlefs_check(conf.partition_label);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "SPIFFS_check() failed (%s)", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "LITTLEFS_check() failed (%s)", esp_err_to_name(ret));
         return;
     } else {
-        ESP_LOGI(TAG, "SPIFFS_check() successful");
+        ESP_LOGI(TAG, "LITTLEFS_check() successful");
     }
 #endif
 
     size_t total = 0, used = 0;
-    ret = esp_spiffs_info(conf.partition_label, &total, &used);
+    ret = esp_littlefs_info(conf.partition_label, &total, &used);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get SPIFFS partition information (%s). Formatting...", esp_err_to_name(ret));
-        esp_spiffs_format(conf.partition_label);
+        ESP_LOGE(TAG, "Failed to get LITTLEFS partition information (%s). Formatting...", esp_err_to_name(ret));
+        esp_littlefs_format(conf.partition_label);
         return;
     } else {
         ESP_LOGI(TAG, "Partition size: total: %lu, used: %lu", total, used);
     }
     
-    list_files(SPIFFS_BASE_PATH);
+    ESP_LOGI(TAG, "LITTLEFS file tree:");
+    list_file_tree(LITTLEFS_BASE_PATH, 0);
     
     char bda_str[18] = {0};
     ret = nvs_flash_init();
@@ -605,13 +620,13 @@ void app_main(void) {
     /* Configure GPIO with the given settings. */
     gpio_config(&io_conf);
 
-    /* Format the spiffs partition if the beak button is pressed for 5 seconds. */
+    /* Format the littlefs partition if the beak button is pressed for 5 seconds. */
     if (gpio_get_level(GPIO_INPUT_BEAK)) {
-        vTaskDelay(SPIFFS_FORMAT_BEAK_PRESSED_TIMEOUT / portTICK_PERIOD_MS);
+        vTaskDelay(LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT / portTICK_PERIOD_MS);
         if (gpio_get_level(GPIO_INPUT_BEAK)) {
             ESP_LOGW(TAG, "Pressed the beak button for %d seconds. Formatting...",
-                     SPIFFS_FORMAT_BEAK_PRESSED_TIMEOUT / 1000);
-            esp_spiffs_format(conf.partition_label);
+                     LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT / 1000);
+            esp_littlefs_format(conf.partition_label);
         }
     }
 
@@ -633,9 +648,9 @@ void app_main(void) {
     }
     
     /* NOTE: We should never reach this code. */
-    /* All done, unmount partition and disable SPIFFS. */
-    esp_vfs_spiffs_unregister(conf.partition_label);
-    ESP_LOGI(TAG, "SPIFFS unmounted");
+    /* All done, unmount partition and disable LITTLEFS. */
+    esp_vfs_littlefs_unregister(conf.partition_label);
+    ESP_LOGI(TAG, "LITTLEFS unmounted");
     
     free(pcm_bytes);
   

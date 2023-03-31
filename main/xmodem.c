@@ -61,7 +61,7 @@ static inline void xmodem_flush_input(int fd) {
     while (read(fd, &dummy, sizeof(dummy)));
 }
 
-esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
+esp_err_t xmodem_receiver_start(int spp_fd, int littlefs_fd) {
     unsigned char *xmodem_buf = NULL;
     unsigned char *p;
     int xmodem_buf_size = 0, crc = 0;
@@ -100,7 +100,7 @@ esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
                     xmodem_buf_size = 1024;
                     goto start_receive;
                 case XMODEM_EOT:
-                    ESP_LOGI(TAG, "Received file with fd %d successfully", spiffs_fd);
+                    ESP_LOGI(TAG, "Received file with fd %d successfully", littlefs_fd);
                     xmodem_flush_input(spp_fd);
                     write(spp_fd, (char []) {XMODEM_ACK}, 1);
                     goto exit; /* normal end */
@@ -164,7 +164,7 @@ esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
             (xmodem_buf[1] == packet_number || xmodem_buf[1] == (unsigned char)packet_number - 1) &&
             xmodem_check_buffer(crc, &xmodem_buf[3], xmodem_buf_size)) {
             if (xmodem_buf[1] == packet_number) {
-                write(spiffs_fd, &xmodem_buf[3], xmodem_buf_size);
+                write(littlefs_fd, &xmodem_buf[3], xmodem_buf_size);
                 ++packet_number;
                 retransmit = XMODEM_MAX_RETRANSMIT + 1;
             }

@@ -56,8 +56,8 @@
         .mem_or_file.opus_packets_len = opus_name##_packets_len                                             \
     }, decoder, dac_data)
 
-#define SPIFFS_CHECK_AT_BOOT 0
-#define SPIFFS_BASE_PATH "/spiffs"
-#define SPIFFS_FORMAT_BEAK_PRESSED_TIMEOUT 5000
+#define LITTLEFS_CHECK_AT_BOOT 0
+#define LITTLEFS_BASE_PATH "/littlefs"
+#define LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT 5000
 
 #endif /* SIPKIP_AUDIO_H */
