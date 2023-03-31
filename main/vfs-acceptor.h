@@ -4,6 +4,13 @@
 #include "esp_gap_bt_api.h"
 #include "esp_spp_api.h"
 
+#define SPP_SERVER_NAME "SPP_SERVER"
+#define SPP_MAX_ARGC 16
+#define SPP_MAX_ARG_LEN 256
+
+#define DECL_COMMAND(name)                                                                                         \
+    static esp_err_t command_##name(int argc, char **argv);
+
 /**
  * @brief     read data from file descriptor
  */

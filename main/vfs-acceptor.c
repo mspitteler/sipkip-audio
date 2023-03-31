@@ -1,11 +1,15 @@
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <time.h>
 #include <sys/time.h>
 #include <sys/unistd.h>
+#include <dirent.h>
+#include <ctype.h>
 
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -21,106 +25,355 @@
 #include "esp_spp_api.h"
 #include "driver/uart.h"
 
+#include "vfs-acceptor.h"
 #include "spp-task.h"
 #include "sipkip-audio.h"
 #include "xmodem.h"
+#include "utils.h"
 
-
-#define SPP_SERVER_NAME "SPP_SERVER"
+#define PRINT_PROMPT()                                                                                             \
+    dprintf(spp_fd, "%d@%s > ", spp_fd, DEVICE_NAME)
 
 static const char *const TAG = "vfs-acceptor";
 
 static const esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE;
 static const esp_spp_role_t role_slave = ESP_SPP_ROLE_SLAVE;
 
-static inline char *bda2str(uint8_t *bda, char *str, size_t size) {
-    if (bda == NULL || str == NULL || size < 18) {
-        return NULL;
-    }
+DECL_COMMAND(help) DECL_COMMAND(rx) DECL_COMMAND(rm) DECL_COMMAND(mv) DECL_COMMAND(cp)
+DECL_COMMAND(mkdir) DECL_COMMAND(rmdir) DECL_COMMAND(ls) DECL_COMMAND(cwd) DECL_COMMAND(pwd)
 
-    uint8_t *p = bda;
-    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
-            p[0], p[1], p[2], p[3], p[4], p[5]);
-    return str;
+static int spp_fd = -1;
+
+struct vfs_commands {
+    const char *name;
+    const char *usage;
+    esp_err_t (*fn)(int argc, char **argv);
+};
+
+static const struct vfs_commands commands[] = {
+    {
+        .name = "help",
+        .usage = "Usage: help [command_name]\n\tPrints help information about command [command_name].\n", 
+        .fn = &command_help
+    },
+    {
+        .name = "rx",
+        .usage = "Usage: rx [filename]\n\tStarts receiving file [filename] with protocol XMODEM.\n",
+        .fn = &command_rx
+    },
+    {
+        .name = "rm",
+        .usage = "Usage: rm [filename]\n\tRemoves file [filename].\n",
+        .fn = &command_rm
+    },
+    {
+        .name = "mv",
+        .usage = "Usage: mv [src_name] [dst_name]\n\tMoves file or directory [src_name] to [dst_name].\n",
+        .fn = &command_mv
+    },
+    {
+        .name = "cp",
+        .usage = "Usage: cp [src_filename] [dst_filename]\n\tCopies file [src_filename] to [dst_filename].\n",
+        .fn = &command_cp
+    },
+    {
+        .name = "mkdir",
+        .usage = "Usage: mkdir [dirname]\n\tCreates directory [dirname].\n",
+        .fn = &command_mkdir
+    },
+    {
+        .name = "rmdir",
+        .usage = "Usage: rmdir [dirname]\n\tRemoves directory [dirname] (only if it is empty).\n",
+        .fn = &command_rmdir
+    },
+    {
+        .name = "ls",
+        .usage = "Usage: ls [name]\n\tLists files and directories in [name], or only [name] if [name] is a file.\n",
+        .fn = &command_ls
+    },
+    {
+        .name = "cwd",
+        .usage = "Usage: cwd [dirname]\n\tChange current working directory to [dirname]\n",
+        .fn = &command_cwd
+    },
+    {
+        .name = "pwd",
+        .usage = "Usage: pwd\n\tPrints current working directory.\n",
+        .fn = &command_pwd
+    },
+};
+
+static inline const struct vfs_commands *find_command(const char *name) {
+    const struct vfs_commands *command;
+    for (command = commands; command != commands + sizeof(commands) / sizeof(*commands) &&
+         strcmp(name, command->name); command++);
+
+    if (command == commands + sizeof(commands) / sizeof(*commands))
+        return NULL;
+    return command;
 }
 
-static inline char *dirname(char *path) {
-    static const char dot[] = ".";
-    char *last_slash;
+static esp_err_t command_help(int argc, char **argv) {
+    /* General help. */
+    if (argc == 1) {
+        dprintf(spp_fd, "Available commands:\n");
+        for (const struct vfs_commands *command = commands;
+             command != commands + sizeof(commands) / sizeof(*commands); command++)
+             dprintf(spp_fd, "\t* %s\n", command->name);
+        dprintf(spp_fd, "Type `help [command_name]' for more information about a specific command.\n");
+        return ESP_OK;
+    /* Help for specific command. */
+    } else if (argc == 2) {
+        const struct vfs_commands *command = find_command(argv[1]);
+        if (!command) {
+            dprintf(spp_fd, "Unknown command: %s!\n", argv[1]);
+            return ESP_OK;
+        }
 
-    /* Find last '/'.  */
-    last_slash = path != NULL ? strrchr(path, '/') : NULL;
+        dprintf(spp_fd, "%s", command->usage);
+        return ESP_OK;
+    }
+    /* Wrong amount of arguments. */
+    return ESP_ERR_INVALID_ARG;
+}
 
-    if (last_slash == path)
-        /* The last slash is the first character in the string.  We have to
-           return "/".  */
-        ++last_slash;
-    else if (last_slash != NULL && last_slash[1] == '\0')
-        /* The '/' is the last character, we have to look further.  */
-        last_slash = memchr(path, last_slash - path, '/');
+static esp_err_t command_rx(int argc, char **argv) {
+    int spiffs_fd;
+    bool remove_file = false;
+    
+    if (argc != 2)
+        /* Wrong amount of arguments, or first argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
 
-    if (last_slash != NULL)
-        /* Terminate the path.  */
-        last_slash[0] = '\0';
-    else
-        /* This assignment is ill-designed but the XPG specs require to
-           return a string containing "." in any case no directory part is
-           found and so a static and constant string is required.  */
-        path = (char *)dot;
+    if (strstr(argv[1], SPIFFS_BASE_PATH"/") != argv[1]) {
+        dprintf(spp_fd, "Invalid file name: %s, doesn't start with %s\n", argv[1], SPIFFS_BASE_PATH"/");
+        return ESP_OK;
+    }
+    ESP_LOGI(TAG, "Detected valid filename: %s", argv[1]);
 
-    return path;
+    spiffs_fd = open(argv[1], O_WRONLY | O_CREAT | O_EXCL);
+    if (spiffs_fd < 0) {
+        dprintf(spp_fd, "Failed to open file %s: %s\n", argv[1], strerror(errno));
+        return ESP_OK;
+    }
+
+    if (xmodem_receiver_start(spp_fd, spiffs_fd) != ESP_OK) {
+        dprintf(spp_fd, "Failed to receive file %s using XMODEM\n", argv[1]);
+        remove_file = true;
+    }
+
+    /* Close file, and unlink if the transfer failed. */
+    close(spiffs_fd);
+    if (remove_file)
+        command_rm(argc, argv);
+    return ESP_OK;
+}
+
+static esp_err_t command_rm(int argc, char **argv) {
+    int ret;
+    
+    if (argc != 2)
+        /* Wrong amount of arguments, or first argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    ESP_LOGI(TAG, "Removing file: %s", argv[1]);
+    
+    ret = remove(argv[1]);
+    if (ret) {
+        dprintf(spp_fd, "Failed to remove file %s: %s\n", argv[1], strerror(errno));
+        return ESP_OK;
+    }
+    
+    return ESP_OK;
+}
+
+static esp_err_t command_mv(int argc, char **argv) {
+    int ret;
+    
+    if (argc != 3)
+        /* Wrong amount of arguments, or first and second argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    ESP_LOGI(TAG, "Moving file: %s to %s", argv[1], argv[2]);
+    
+    ret = rename(argv[1], argv[2]);
+    if (ret) {
+        dprintf(spp_fd, "Failed to move file %s to %s: %s\n", argv[1], argv[2], strerror(errno));
+        return ESP_OK;
+    }
+    
+    return ESP_OK;
+}
+
+static esp_err_t command_cp(int argc, char **argv) {
+    int ret;
+    
+    if (argc != 3)
+        /* Wrong amount of arguments, or first and second argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    ESP_LOGI(TAG, "Copying file: %s to %s", argv[1], argv[2]);
+    
+    ret = copy_file(argv[1], argv[2]);
+    if (ret) {
+        dprintf(spp_fd, "Failed to copy file %s to %s: %s\n", argv[1], argv[2], strerror(errno));
+        return ESP_OK;
+    }
+    
+    return ESP_OK;
+}
+
+static esp_err_t command_mkdir(int argc, char **argv) {
+    int ret;
+    
+    if (argc != 2)
+        /* Wrong amount of arguments, or first argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    ESP_LOGI(TAG, "Creating directory: %s", argv[1]);
+    
+    ret = mkdir(argv[1], 0777);
+    if (ret) {
+        dprintf(spp_fd, "Failed to create directory %s: %s\n", argv[1], strerror(errno));
+        return ESP_OK;
+    }
+    
+    return ESP_OK;
+}
+
+static esp_err_t command_rmdir(int argc, char **argv) {
+    int ret;
+    
+    if (argc != 2)
+        /* Wrong amount of arguments, or first argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    ESP_LOGI(TAG, "Removing directory: %s\n", argv[1]);
+    
+    ret = rmdir(argv[1]);
+    if (ret) {
+        dprintf(spp_fd, "Failed to remove directory %s: %s\n", argv[1], strerror(errno));
+        return ESP_OK;
+    }
+    
+    return ESP_OK;
+}
+
+static esp_err_t command_ls(int argc, char **argv) {
+    char buffer[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    if (argc == 1) {
+        if (!getcwd(buffer, sizeof(buffer) / sizeof(*buffer))) {
+            dprintf(spp_fd, "Couldn't determine current working directory: %s!\n", strerror(errno));
+            return ESP_OK;
+        }
+    } else if (argc == 2) {
+        strncpy(buffer, argv[1], sizeof(buffer) / sizeof(*buffer));
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+    DIR *dir = opendir(buffer);
+    if (!dir) {
+        dprintf(spp_fd, "Couldn't open directory %s: %s!\n", buffer, strerror(errno));
+        return ESP_OK;
+    }
+
+    for (;;) {
+        struct dirent* de = readdir(dir);
+        if (!de)
+            break;
+        
+        dprintf(spp_fd, "%s\n", de->d_name);
+    }
+
+    closedir(dir);
+    return ESP_OK;
+}
+
+static esp_err_t command_cwd(int argc, char **argv) {
+    if (argc != 2)
+        /* Wrong amount of arguments, or first argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    if (chdir(argv[1])) {
+        dprintf(spp_fd, "Couldn't change current working directory to %s: %s!\n", argv[1], strerror(errno));
+        return ESP_OK;
+    }
+    
+    return ESP_OK;
+}
+
+static esp_err_t command_pwd(int argc, char **argv) {
+    char buffer[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    
+    if (argc != 1)
+        return ESP_ERR_INVALID_ARG;
+    
+    if (!getcwd(buffer, sizeof(buffer) / sizeof(*buffer))) {
+        dprintf(spp_fd, "Couldn't determine current working directory: %s!\n", strerror(errno));
+        return ESP_OK;
+    }
+    dprintf(spp_fd, "%s\n", buffer);
+    
+    return ESP_OK;
 }
 
 void spp_read_handle(void *param) {
-    int spp_fd = (ptrdiff_t)param;
-    int tries = 0, max_tries = 10;
+    char dummy, buf[SPP_MAX_ARG_LEN], *argv[SPP_MAX_ARGC];
+    esp_err_t err;
+    spp_fd = (ptrdiff_t)param;
+   
+    PRINT_PROMPT();
 
-    while (1) {
-        FILE *spiffs_file = NULL;
-        char spiffs_filename[CONFIG_SPIFFS_OBJ_NAME_LEN + 1] = {0};
-        while (memmem(spiffs_filename, CONFIG_SPIFFS_OBJ_NAME_LEN, SPIFFS_BASE_PATH"/",
-                      strlen(SPIFFS_BASE_PATH"/")) != spiffs_filename && tries <= max_tries) {
-            ssize_t ret = 0;
-            while ((ret = read(spp_fd, spiffs_filename, CONFIG_SPIFFS_OBJ_NAME_LEN)) == 0) {
-                /* There is no data, retry after 500 ms */
-                vTaskDelay(500 / portTICK_PERIOD_MS);
-            }
-            if (ret < 0) {
-                ESP_LOGE(TAG, "Failed to read from fd %d: %s", spp_fd, strerror(errno));
-                goto exit;
-            }
-
-            tries++;
-        }
-        if (tries > max_tries) {
-            ESP_LOGE(TAG, "Tried %d times to get a valid filename, but none received; exiting", max_tries);
-            break;
-        }
+    for (;;) {
+        const struct vfs_commands *command;
+        static const char *const delim = " \t\n\r";
+        int argc = 0;
         
-        spiffs_filename[CONFIG_SPIFFS_OBJ_NAME_LEN] = '\0';
-
-        char *newline, *carriage_return = NULL;
-        if ((newline = strchr(spiffs_filename, '\n')))
-            newline[0] = '\0';
-        if ((carriage_return = strchr(spiffs_filename, '\r')))
-            carriage_return[0] = '\0';
-        
-        ESP_LOGI(TAG, "Detected valid filename: %s", spiffs_filename);
-        
-        spiffs_file = fopen(spiffs_filename, "w");
-        if (!spiffs_file) {
-            ESP_LOGE(TAG, "Failed to open file %s: %s", spiffs_filename, strerror(errno));
+        ssize_t ret = read(spp_fd, buf, sizeof(buf) / sizeof(*buf));
+        if (ret < 0) {
+            ESP_LOGE(TAG, "Couldn't read from vfs fd %d: %s!", spp_fd, strerror(errno));
             goto exit;
+        } else if (!ret) {
+            vTaskDelay(100 / portTICK_PERIOD_MS);
+            continue;
         }
-        while (xmodem_receiver_start(spp_fd, fileno(spiffs_file)) != ESP_OK);
-        /* Close file if applicable. */
-        if (spiffs_file)
-            fclose(spiffs_file);
         
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        while (read(spp_fd, &dummy, sizeof(dummy)));
+       
+        buf[MIN(ret, sizeof(buf) / sizeof(*buf) - 1)] = '\0';
+        char *pch = strtok(buf, delim);
+        /* User just pressed enter probably if pch is NULL. */
+        if (pch) {
+            while (pch && argc < SPP_MAX_ARGC) {
+                argv[argc] = strdup(pch);
+                if (!argv[argc]) {
+                    ESP_LOGE(TAG, "strdup failed: %s!", strerror(errno));
+                    goto exit;
+                }
+                
+                ESP_LOGI(TAG, "Argument argv[%d]=\"%s\"", argc, argv[argc]);
+                
+                pch = strtok(NULL, delim);
+                argc++;
+            }
+            
+            command = find_command(argv[0]);
+            if (!command) {
+                dprintf(spp_fd, "Unknown command: %s!\n", argv[0]);
+            } else if ((err = command->fn(argc, argv))) {
+                dprintf(spp_fd, "Command %s error: %s!\n", command->name, esp_err_to_name(err));
+                dprintf(spp_fd, "%s", command->usage);
+            }
+            
+            for (int i = 0; i < argc; i++)
+                free(argv[i]);
+        }
+        
+        PRINT_PROMPT();
     }
     
 exit:
+    spp_fd = -1;
     spp_wr_task_shut_down();
 }
 
@@ -165,7 +418,7 @@ void esp_spp_cb(uint16_t e, void *p) {
         break;
     case ESP_SPP_SRV_OPEN_EVT:
         ESP_LOGI(TAG, "ESP_SPP_SRV_OPEN_EVT status:%d handle:%d, rem_bda:[%s]", param->srv_open.status,
-                 param->srv_open.handle, bda2str(param->srv_open.rem_bda, bda_str, sizeof(bda_str)));
+                 param->srv_open.handle, bd_address_to_string(param->srv_open.rem_bda, bda_str, sizeof(bda_str)));
         if (param->srv_open.status == ESP_SPP_SUCCESS) {
             spp_wr_task_start_up(&spp_read_handle, param->srv_open.fd);
         }
