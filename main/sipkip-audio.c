@@ -39,6 +39,7 @@
 #include "spp-task.h"
 #include "vfs-acceptor.h"
 #include "sipkip-audio.h"
+#include "utils.h"
 
 static const char *const TAG = "sipkip-audio";
 
@@ -61,8 +62,6 @@ static const int gpio_states_index_to_io_num[] = {
     /* 8..15 are virtual inputs for the clips, that can be read if gpio_set_mux_clips is set to true. */
     [16] = GPIO_INPUT_BEAK
 };
-
-static const esp_spp_mode_t esp_spp_mode = ESP_SPP_MODE_VFS;
 
 struct dac_data {
     dac_continuous_handle_t handle;
@@ -98,8 +97,9 @@ static void dac_write_data_synchronously(void *data) {
         if (dac_data->buffer_full) {
             ESP_ERROR_CHECK(dac_continuous_write(dac_data->handle, dac_data->data, dac_data->data_size, NULL, -1));
             dac_data->buffer_full = 0;
+        } else {
+            vTaskDelay(10 / portTICK_PERIOD_MS);
         }
-        vTaskDelay(2 / portTICK_PERIOD_MS);
     }
 }
 
@@ -187,6 +187,7 @@ static void gpio_update_states(void *arg) {
     void (*on_changed)(bool (*)[17]) = arg;
     bool input = false, gpio_mux_clips = false;
     
+    /* TODO: Attach clock to mux pins, instead of this bodged approach. */
     for (;;) {
         if (input) {
             for (int i = 0; i < 8; i++) {
@@ -231,7 +232,7 @@ static void gpio_update_states(void *arg) {
         
         /* Alternate reading inputs and turning on the LEDs. */
         input = !input;
-        vTaskDelay(2 / portTICK_PERIOD_MS);
+        vTaskDelay(5 / portTICK_PERIOD_MS);
     }
 }
 
@@ -240,29 +241,6 @@ static void on_gpio_states_changed(bool (*states)[17]) {
         gpio_states[i] = (*states)[i];
     if (gpio_states_changed)
         *gpio_states_changed = true;
-}
-
-static inline char *bda2str(uint8_t *bda, char *str, size_t size) {
-    if (bda == NULL || str == NULL || size < 18) {
-        return NULL;
-    }
-
-    uint8_t *p = bda;
-    sprintf(str, "%02x:%02x:%02x:%02x:%02x:%02x",
-            p[0], p[1], p[2], p[3], p[4], p[5]);
-    return str;
-}
-
-static inline char *readable_file_size(size_t size /* in bytes */, char *buf) {
-    static const char *units[] = {"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"};
-    int i = 0;
-    size *= 1000;
-    while (size >= 1024000) {
-        size >>= 10;
-        i++;
-    }
-    sprintf(buf, "%lu.%lu %s", size / 1000, size % 1000, units[i]);
-    return buf;
 }
 
 /**
@@ -517,39 +495,40 @@ void app_main(void) {
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     if (esp_bt_controller_init(&bt_cfg) != ESP_OK) {
-        ESP_LOGE(TAG,"%s initialize controller failed", __func__);
+        ESP_LOGE(TAG, "%s initialize controller failed", __func__);
         return;
     }
 
     if (esp_bt_controller_enable(ESP_BT_MODE_CLASSIC_BT) != ESP_OK) {
-        ESP_LOGE(TAG,"%s enable controller failed", __func__);
+        ESP_LOGE(TAG, "%s enable controller failed", __func__);
         return;
     }
 
     if (esp_bluedroid_init() != ESP_OK) {
-        ESP_LOGE(TAG,"%s initialize bluedroid failed", __func__);
+        ESP_LOGE(TAG, "%s initialize bluedroid failed", __func__);
         return;
     }
 
     if (esp_bluedroid_enable() != ESP_OK) {
-        ESP_LOGE(TAG,"%s enable bluedroid failed", __func__);
+        ESP_LOGE(TAG, "%s enable bluedroid failed", __func__);
         return;
     }
 
     if (esp_bt_gap_register_callback(&esp_bt_gap_cb) != ESP_OK) {
-        ESP_LOGE(TAG,"%s gap register failed: %s\n", __func__, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "%s gap register failed: %s\n", __func__, esp_err_to_name(ret));
         return;
     }
 
     if (esp_spp_register_callback(&esp_spp_stack_cb) != ESP_OK) {
-        ESP_LOGE(TAG,"%s spp register failed", __func__);
+        ESP_LOGE(TAG, "%s spp register failed", __func__);
         return;
     }
 
     spp_task_task_start_up();
 
-    if (esp_spp_init(esp_spp_mode) != ESP_OK) {
-        ESP_LOGE(TAG,"%s spp init failed", __func__);
+    esp_spp_cfg_t bt_spp_cfg = BT_SPP_DEFAULT_CONFIG();
+    if (esp_spp_enhanced_init(&bt_spp_cfg) != ESP_OK) {
+        ESP_LOGE(TAG, "%s spp init failed", __func__);
         return;
     }
 
@@ -568,7 +547,8 @@ void app_main(void) {
     esp_bt_pin_code_t pin_code;
     esp_bt_gap_set_pin(pin_type, 0, pin_code);
 
-    ESP_LOGI(TAG,"Own address:[%s]", bda2str((uint8_t *)esp_bt_dev_get_address(), bda_str, sizeof(bda_str)));
+    ESP_LOGI(TAG,"Own address:[%s]", bd_address_to_string((uint8_t *)esp_bt_dev_get_address(),
+                                                          bda_str, sizeof(bda_str)));
     
     /* Allocate continuous channels */
     ESP_ERROR_CHECK(dac_continuous_new_channels(&cont_cfg, &dac_handle));
