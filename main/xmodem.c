@@ -58,7 +58,7 @@ static bool xmodem_check_buffer(int crc, const unsigned char *buf, ssize_t buf_s
 
 static inline void xmodem_flush_input(int fd) {
     char dummy;
-    while (read(fd, &dummy, sizeof(dummy)));
+    while (read(fd, &dummy, sizeof(dummy)) > 0);
 }
 
 esp_err_t xmodem_receiver_start(int spp_fd, int littlefs_fd) {

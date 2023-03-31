@@ -338,7 +338,7 @@ void spp_read_handle(void *param) {
             continue;
         }
         
-        while (read(spp_fd, &dummy, sizeof(dummy)));
+        while (read(spp_fd, &dummy, sizeof(dummy)) > 0);
        
         buf[MIN(ret, sizeof(buf) / sizeof(*buf) - 1)] = '\0';
         char *pch = strtok(buf, delim);
