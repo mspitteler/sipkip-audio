@@ -57,7 +57,8 @@ static bool xmodem_check_buffer(int crc, const unsigned char *buf, ssize_t buf_s
 }
 
 static inline void xmodem_flush_input(int fd) {
-    while (xmodem_read_byte(fd, ((XMODEM_READ_TIMEOUT_MS / portTICK_PERIOD_MS) * 3) >> 1) >= 0);
+    char dummy;
+    while (read(fd, &dummy, sizeof(dummy)));
 }
 
 esp_err_t xmodem_receiver_start(int spp_fd, int spiffs_fd) {
