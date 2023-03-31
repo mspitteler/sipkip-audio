@@ -249,16 +249,22 @@ static void on_gpio_states_changed(bool (*states)[17]) {
 static void list_file_tree(const char *const path, int depth) {
     struct dirent *dp;
     DIR *dir = opendir(path);
-    static bool last_printed[32] = {false};
+    static bool last_printed[LITTLEFS_MAX_DEPTH] = {false};
 
     /* Unable to open directory stream. */
     if (!dir) {
         ESP_LOGE(TAG, "Failed to open directory %s: %s!", path, strerror(errno));
         return; 
     }
+    
+    if (depth >= LITTLEFS_MAX_DEPTH) {
+        ESP_LOGW(TAG, "Max directory nesting depth reached: %d!", LITTLEFS_MAX_DEPTH);
+        return;
+    }
 
     while ((dp = readdir(dir)) != NULL) {
-        char d_path[CONFIG_LITTLEFS_OBJ_NAME_LEN]; /* Here I am using sprintf which is safer than strcat. */
+        /* Accomodate for leading slashes, length of the path argument and trailing NUL character. */
+        char d_path[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) + strlen(path) + 1];
         long dir_loc = telldir(dir);
         struct dirent *tmp_dp;
         do {
@@ -267,7 +273,8 @@ static void list_file_tree(const char *const path, int depth) {
         last_printed[depth] = !tmp_dp;
         seekdir(dir, dir_loc);
         
-        sprintf(d_path, "%s/%s", path, dp->d_name);
+        /* Here I am using sprintf which is safer than strcat. */
+        snprintf(d_path, sizeof(d_path) / sizeof(*d_path), "%s/%s", path, dp->d_name);
         
         if (dp->d_type != DT_DIR) {
             struct stat st;

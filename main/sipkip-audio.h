@@ -57,6 +57,7 @@
     }, decoder, dac_data)
 
 #define LITTLEFS_CHECK_AT_BOOT 0
+#define LITTLEFS_MAX_DEPTH 8
 #define LITTLEFS_BASE_PATH "/littlefs"
 #define LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT 5000
 
