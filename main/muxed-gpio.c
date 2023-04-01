@@ -93,6 +93,25 @@ void muxed_gpio_setup(void) {
     gpio_config(&io_conf);
 }
 
+
+/**
+ *                           |___        ______        ______        ______        ______
+ * GPIO_NUM_LED_*_OUT:       |   |      |      |      |      |      |      |      |      |
+ *                           |    ^^^^^^        ^^^^^^        ^^^^^^        ^^^^^^        ^^^
+ *                           |___               _____________               _____________
+ * !gpio_mux_clips:          |   |             |             |             |             |
+ *                           |    ^^^^^^^^^^^^^               ^^^^^^^^^^^^^               ^^^
+ *                           |    _____________               _____________               ___
+ * gpio_mux_clips:           |   |             |             |             |             |
+ *                           |^^^               ^^^^^^^^^^^^^               ^^^^^^^^^^^^^
+ *                           |                  ______                      ______
+ * GPIO_NUM_MUX_BUTTONS_OUT: |                 |      |                    |      |
+ *                           |^^^^^^^^^^^^^^^^^        ^^^^^^^^^^^^^^^^^^^^        ^^^^^^^^^^
+ *                           |    ______                      ______                      ___
+ * GPIO_NUM_MUX_CLIPS_OUT:   |   |      |                    |      |                    |
+ *                           |^^^        ^^^^^^^^^^^^^^^^^^^^        ^^^^^^^^^^^^^^^^^^^^
+ */
+
 void muxed_gpio_update(void *arg) {
     static bool states[MUXED_INPUT_N];
     muxed_inputs_on_changed_fn on_changed = arg;
