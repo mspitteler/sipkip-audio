@@ -1,4 +1,4 @@
-idf_component_register(SRCS "sipkip-audio.c" "spp-task.c" "vfs-acceptor.c" "xmodem.c"
+idf_component_register(SRCS "sipkip-audio.c" "spp-task.c" "vfs-acceptor.c" "xmodem.c" "muxed-gpio.c"
                        INCLUDE_DIRS "..")
 
-target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-format" -DOP_FIXED_POINT)
+target_compile_options(${COMPONENT_LIB} PRIVATE "-Wno-format" "-Wno-error=unused-const-variable" -DOP_FIXED_POINT)

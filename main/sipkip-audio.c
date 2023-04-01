@@ -39,6 +39,7 @@
 #include "spp-task.h"
 #include "vfs-acceptor.h"
 #include "sipkip-audio.h"
+#include "muxed-gpio.h"
 #include "utils.h"
 
 static const char *const TAG = "sipkip-audio";
@@ -48,20 +49,6 @@ static TaskHandle_t dac_write_data_task_handle = NULL;
 
 static volatile bool *gpio_states_changed = NULL;
 static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-static volatile bool gpio_output_states[] = {1, 0, 0, 0, 0, 0, 0, 0};
-
-static const int io_num_to_gpio_states_index[] = {
-    [GPIO_INPUT_STAR_L] = 0, [GPIO_INPUT_TRIANGLE_L] = 1, [GPIO_INPUT_SQUARE_L] = 2, [GPIO_INPUT_HEART_L] = 3,
-    [GPIO_INPUT_HEART_R] = 4, [GPIO_INPUT_SQUARE_R] = 5, [GPIO_INPUT_TRIANGLE_R] = 6, [GPIO_INPUT_STAR_R] = 7,
-    /* 8..15 are virtual inputs for the clips, that can be read if gpio_set_mux_clips is set to true. */
-    [GPIO_INPUT_BEAK] = 16
-};
-static const int gpio_states_index_to_io_num[] = {
-    [0] = GPIO_INPUT_STAR_L, [1] = GPIO_INPUT_TRIANGLE_L, [2] = GPIO_INPUT_SQUARE_L, [3] = GPIO_INPUT_HEART_L,
-    [4] = GPIO_INPUT_HEART_R, [5] = GPIO_INPUT_SQUARE_R, [6] = GPIO_INPUT_TRIANGLE_R, [7] = GPIO_INPUT_STAR_R,
-    /* 8..15 are virtual inputs for the clips, that can be read if gpio_set_mux_clips is set to true. */
-    [16] = GPIO_INPUT_BEAK
-};
 
 struct dac_data {
     dac_continuous_handle_t handle;
@@ -182,60 +169,6 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
     return ESP_OK;
 }
 
-static void gpio_update_states(void *arg) {
-    static bool states[17];
-    void (*on_changed)(bool (*)[17]) = arg;
-    bool input = false, gpio_mux_clips = false;
-    
-    /* TODO: Attach clock to mux pins, instead of this bodged approach. */
-    for (;;) {
-        if (input) {
-            for (int i = 0; i < 8; i++) {
-                int io_num = gpio_states_index_to_io_num[i];
-                gpio_set_level(io_num, 1);
-            }
-            /* If we're reading the inputs; alternate between buttons and clips. */
-            gpio_mux_clips = !gpio_mux_clips;
-            gpio_set_level(GPIO_MUX_BUTTONS, !gpio_mux_clips);
-            gpio_set_level(GPIO_MUX_CLIPS, gpio_mux_clips);
-            
-            gpio_set_level(GPIO_OUTPUT_LED_LEFT, 0);
-            gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 0);
-            gpio_set_level(GPIO_OUTPUT_LED_RIGHT, 0);
-            
-            for (int i = 0; i < sizeof(states); i++) {
-                int io_num = gpio_states_index_to_io_num[i];
-                int level;
-                if (i >= 8 && i < 16) /* These are not real GPIO inputs. */
-                    continue;
-
-                if (i < 16)
-                    gpio_pulldown_en(io_num);
-                if (states[i + (i == 16 ? 0 : ((uint8_t)gpio_mux_clips << 3))] != (level = gpio_get_level(io_num)))
-                    on_changed(&states);
-                
-                states[i + (i == 16 ? 0 : ((uint8_t)gpio_mux_clips << 3))] = level;
-                if (i < 16)
-                    gpio_pulldown_dis(io_num);
-            }
-        } else {
-            gpio_set_level(GPIO_OUTPUT_LED_LEFT, 1);
-            gpio_set_level(GPIO_OUTPUT_LED_MIDDLE, 1);
-            gpio_set_level(GPIO_OUTPUT_LED_RIGHT, 1);
-            
-            gpio_set_level(GPIO_MUX_BUTTONS, 0);
-            gpio_set_level(GPIO_MUX_CLIPS, 0);
-            
-            for (int i = 0; i < sizeof(gpio_output_states); i++)
-                gpio_set_level(gpio_states_index_to_io_num[i], !gpio_output_states[i]);
-        }
-        
-        /* Alternate reading inputs and turning on the LEDs. */
-        input = !input;
-        vTaskDelay(5 / portTICK_PERIOD_MS);
-    }
-}
-
 static void on_gpio_states_changed(bool (*states)[17]) {
     for (int i = 0; i < sizeof(*states); i++)
         gpio_states[i] = (*states)[i];
@@ -349,75 +282,75 @@ static int play_littlefs_opus_file(OpusDecoder *decoder, struct dac_data *dac_da
 static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     static bool even = false;
     
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]]) {
+    if (gpio_states[MUXED_INPUT_HEART_L_BUTTON] || 
+        gpio_states[MUXED_INPUT_HEART_R_BUTTON]) {
         DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, mem, decoder, dac_data);
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L]] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R]] = 0;
+        gpio_states[MUXED_INPUT_HEART_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_HEART_R_BUTTON] = 0;
         even = !even;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L] + 8] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R] + 8]) {
+    if (gpio_states[MUXED_INPUT_HEART_L_CLIP] || 
+        gpio_states[MUXED_INPUT_HEART_R_CLIP]) {
         play_littlefs_opus_file(decoder, dac_data, "/littlefs/1");
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_L] + 8] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_HEART_R] + 8] = 0;
+        gpio_states[MUXED_INPUT_HEART_L_CLIP] = 0;
+        gpio_states[MUXED_INPUT_HEART_R_CLIP] = 0;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]]) {
+    if (gpio_states[MUXED_INPUT_SQUARE_L_BUTTON] || 
+        gpio_states[MUXED_INPUT_SQUARE_R_BUTTON]) {
         DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, mem, decoder, dac_data);
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L]] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R]] = 0;
+        gpio_states[MUXED_INPUT_SQUARE_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_SQUARE_R_BUTTON] = 0;
         even = !even;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L] + 8] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R] + 8]) {
+    if (gpio_states[MUXED_INPUT_SQUARE_L_CLIP] || 
+        gpio_states[MUXED_INPUT_SQUARE_R_CLIP]) {
         play_littlefs_opus_file(decoder, dac_data, "/littlefs/2");
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_L] + 8] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_SQUARE_R] + 8] = 0;
+        gpio_states[MUXED_INPUT_SQUARE_L_CLIP] = 0;
+        gpio_states[MUXED_INPUT_SQUARE_R_CLIP] = 0;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]]) {
+    if (gpio_states[MUXED_INPUT_TRIANGLE_L_BUTTON] || 
+        gpio_states[MUXED_INPUT_TRIANGLE_R_BUTTON]) {
         DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, mem, decoder, dac_data);
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L]] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R]] = 0;
+        gpio_states[MUXED_INPUT_TRIANGLE_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_TRIANGLE_R_BUTTON] = 0;
         even = !even;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L] + 8] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R] + 8]) {
+    if (gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] || 
+        gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP]) {
         play_littlefs_opus_file(decoder, dac_data, "/littlefs/3");
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_L] + 8] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_TRIANGLE_R] + 8] = 0;
+        gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] = 0;
+        gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP] = 0;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]]) {
+    if (gpio_states[MUXED_INPUT_STAR_L_BUTTON] || 
+        gpio_states[MUXED_INPUT_STAR_R_BUTTON]) {
         DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, mem, decoder, dac_data);
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L]] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R]] = 0;
+        gpio_states[MUXED_INPUT_STAR_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_STAR_R_BUTTON] = 0;
         even = !even;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L] + 8] || 
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R] + 8]) {
+    if (gpio_states[MUXED_INPUT_STAR_L_CLIP] || 
+        gpio_states[MUXED_INPUT_STAR_R_CLIP]) {
         play_littlefs_opus_file(decoder, dac_data, "/littlefs/4");
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_L] + 8] = 0;
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_STAR_R] + 8] = 0;
+        gpio_states[MUXED_INPUT_STAR_L_CLIP] = 0;
+        gpio_states[MUXED_INPUT_STAR_R_CLIP] = 0;
     }
-    if (gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]]) {
+    if (gpio_states[MUXED_INPUT_BEAK_SWITCH]) {
         play_littlefs_opus_file(decoder, dac_data, "/littlefs/b");
         if (even)
             DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
@@ -425,7 +358,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
         else
             DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, mem, 
                             decoder, dac_data);
-        gpio_states[io_num_to_gpio_states_index[GPIO_INPUT_BEAK]] = 0;
+        gpio_states[MUXED_INPUT_BEAK_SWITCH] = 0;
         even = !even;
     }
 }
@@ -601,36 +534,12 @@ void app_main(void) {
     DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, 
                    decoder, &dac_data);
     
-    /* Zero-initialize the config structure. */
-    gpio_config_t io_conf = {};
-   
-    /* Set as output mode. */
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    /* Bit mask of the pins that you want to set as outputs. */
-    io_conf.pin_bit_mask = GPIO_OUTPUT_PIN_SEL;
-    /* Configure GPIO with the given settings. */
-    gpio_config(&io_conf);
-   
-    /* Bit mask of the pins, use inputs here. */
-    io_conf.pin_bit_mask = GPIO_INPUT_PIN_SEL;
-    /* Set as input mode. */
-    io_conf.mode = GPIO_MODE_INPUT;
-    /* Enable pull-down mode. */
-    io_conf.pull_down_en = 1;
-    /* Configure GPIO with the given settings. */
-    gpio_config(&io_conf);
-    
-    /* Bit mask of the pins, use input/open drain output here. */
-    io_conf.pin_bit_mask = GPIO_INPUT_OUTPUT_PIN_SEL;
-    /* Set as input/output mode. */
-    io_conf.mode = GPIO_MODE_INPUT_OUTPUT_OD;
-    /* Configure GPIO with the given settings. */
-    gpio_config(&io_conf);
+    muxed_gpio_setup();
 
     /* Format the littlefs partition if the beak button is pressed for 5 seconds. */
-    if (gpio_get_level(GPIO_INPUT_BEAK)) {
+    if (gpio_get_level(GPIO_NUM_15)) {
         vTaskDelay(LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT / portTICK_PERIOD_MS);
-        if (gpio_get_level(GPIO_INPUT_BEAK)) {
+        if (gpio_get_level(GPIO_NUM_15)) {
             ESP_LOGW(TAG, "Pressed the beak button for %d seconds. Formatting...",
                      LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT / 1000);
             esp_littlefs_format(conf.partition_label);
@@ -638,17 +547,19 @@ void app_main(void) {
     }
 
     /* Start gpio task. */
-    xTaskCreate(&gpio_update_states, "GPIO update states", 2048, &on_gpio_states_changed, 10, 
+    xTaskCreate(&muxed_gpio_update, "GPIO update states", 2048, &on_gpio_states_changed, 10, 
                 &gpio_update_states_task_handle);
+    
+    muxed_outputs[0] = 1;
     
     for (;;) {
         *gpio_states_changed = false;
         play_opus_files(decoder, &dac_data);
         
         for (int i = 0; i < 8; i++)
-            if (gpio_output_states[i]) {
-                gpio_output_states[i] = 0;
-                gpio_output_states[(i + 1) & 7] = 1;
+            if (muxed_outputs[i]) {
+                muxed_outputs[i] = 0;
+                muxed_outputs[(i + 1) & 7] = 1;
                 break;
             }
         vTaskDelay(100 / portTICK_PERIOD_MS);
