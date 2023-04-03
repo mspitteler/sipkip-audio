@@ -1,10 +1,10 @@
-#ifndef GPIO_STATES_H
-#define GPIO_STATES_H
+#ifndef MUXED_GPIO_H
+#define MUXED_GPIO_H
 
 #include <stdbool.h>
 
 enum muxed_inputs {
-    MUXED_INPUT_MIN, /* 0 */
+    MUXED_INPUT_MIN = 0, /* 0 */
     MUXED_INPUT_BUTTONS_MIN = MUXED_INPUT_MIN,
     /* Buttons. */
     MUXED_INPUT_STAR_L_BUTTON = MUXED_INPUT_BUTTONS_MIN,
@@ -30,7 +30,7 @@ enum muxed_inputs {
     MUXED_INPUT_TRIANGLE_R_CLIP,
     MUXED_INPUT_STAR_R_CLIP,
     
-    MUXED_INPUT_CLIPS_MAX = MUXED_INPUT_STAR_R_CLIP,
+    MUXED_INPUT_CLIPS_MAX = MUXED_INPUT_STAR_R_CLIP, /* 15 */
    
     MUXED_INPUT_SWITCH_MIN,
     /* Switches. */
@@ -44,11 +44,28 @@ enum muxed_inputs {
     MUXED_INPUT_N /* 19 */
 };
 
-typedef void (*muxed_inputs_on_changed_fn)(bool (*)[MUXED_INPUT_N]);
+enum muxed_outputs {
+    MUXED_OUTPUT_MIN = 0, /* 0 */
+    MUXED_OUTPUT_LEDS_MIN = MUXED_OUTPUT_MIN,
+    /* LEDs. */
+    MUXED_OUTPUT_STAR_L_LED = MUXED_OUTPUT_LEDS_MIN,
+    MUXED_OUTPUT_TRIANGLE_L_LED,
+    MUXED_OUTPUT_SQUARE_L_LED,
+    MUXED_OUTPUT_HEART_L_LED,
+    MUXED_OUTPUT_HEART_R_LED,
+    MUXED_OUTPUT_SQUARE_R_LED,
+    MUXED_OUTPUT_TRIANGLE_R_LED,
+    MUXED_OUTPUT_STAR_R_LED,
+    
+    MUXED_OUTPUT_LEDS_MAX = MUXED_OUTPUT_STAR_R_LED, /* 7 */
+    MUXED_OUTPUT_MAX = MUXED_OUTPUT_LEDS_MAX,
+    
+    MUXED_OUTPUT_N /* 8 */
+};
 
-void muxed_gpio_setup(void);
-void muxed_gpio_update(void *arg);
+typedef void (*muxed_inputs_on_changed_fn)(volatile bool (*)[MUXED_INPUT_N]);
 
-extern volatile bool muxed_outputs[8];
+void muxed_gpio_setup(muxed_inputs_on_changed_fn fn);
+void muxed_gpio_set_output_levels(bool (*levels)[MUXED_OUTPUT_N]);
 
-#endif /* GPIO_STATES_H */
+#endif /* MUXED_GPIO_H */

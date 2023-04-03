@@ -44,11 +44,11 @@
 
 static const char *const TAG = "sipkip-audio";
 
-static TaskHandle_t gpio_update_states_task_handle = NULL;
 static TaskHandle_t dac_write_data_task_handle = NULL;
 
 static volatile bool *gpio_states_changed = NULL;
-static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static bool gpio_output_states[] = {1, 0, 0, 0, 0, 0, 0, 0};
 
 struct dac_data {
     dac_continuous_handle_t handle;
@@ -169,9 +169,12 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
     return ESP_OK;
 }
 
-static void on_gpio_states_changed(bool (*states)[17]) {
-    for (int i = 0; i < sizeof(*states); i++)
-        gpio_states[i] = (*states)[i];
+static void on_gpio_states_changed(volatile bool (*states)[19]) {
+    for (int i = 0; i < sizeof(*states); i++) {
+        if ((*states)[i])
+            gpio_states[i] = true;
+        (*states)[i] = false;
+    }
     if (gpio_states_changed)
         *gpio_states_changed = true;
 }
@@ -534,7 +537,7 @@ void app_main(void) {
     DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, 
                    decoder, &dac_data);
     
-    muxed_gpio_setup();
+    muxed_gpio_setup(&on_gpio_states_changed);
 
     /* Format the littlefs partition if the beak button is pressed for 5 seconds. */
     if (gpio_get_level(GPIO_NUM_15)) {
@@ -545,23 +548,19 @@ void app_main(void) {
             esp_littlefs_format(conf.partition_label);
         }
     }
-
-    /* Start gpio task. */
-    xTaskCreate(&muxed_gpio_update, "GPIO update states", 2048, &on_gpio_states_changed, 10, 
-                &gpio_update_states_task_handle);
-    
-    muxed_outputs[0] = 1;
     
     for (;;) {
         *gpio_states_changed = false;
         play_opus_files(decoder, &dac_data);
         
         for (int i = 0; i < 8; i++)
-            if (muxed_outputs[i]) {
-                muxed_outputs[i] = 0;
-                muxed_outputs[(i + 1) & 7] = 1;
+            if (gpio_output_states[i]) {
+                gpio_output_states[i] = 0;
+                gpio_output_states[(i + 1) & 7] = 1;
                 break;
             }
+        
+        muxed_gpio_set_output_levels(&gpio_output_states);
         vTaskDelay(100 / portTICK_PERIOD_MS);
     }
     
