@@ -240,8 +240,8 @@ static void list_file_tree(const char *const path, int depth) {
 static int play_littlefs_opus_file(OpusDecoder *decoder, struct dac_data *dac_data, const char *starts_with) {
     glob_t glob_buf;
     char *glob_path;
-    char opus_path[CONFIG_LITTLEFS_OBJ_NAME_LEN];
-    char opus_packets_path[CONFIG_LITTLEFS_OBJ_NAME_LEN];
+    char opus_path[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) * LITTLEFS_MAX_DEPTH];
+    char opus_packets_path[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) * LITTLEFS_MAX_DEPTH];
     
     sprintf(opus_path, "%s-*.opus", starts_with);
     switch (g_glob(opus_path, GLOB_ERR, NULL, &glob_buf)) {

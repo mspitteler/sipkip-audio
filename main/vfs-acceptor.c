@@ -214,7 +214,7 @@ IMPL_COMMAND(rmdir) {
 }
 
 IMPL_COMMAND(ls) {
-    char buffer[CONFIG_LITTLEFS_OBJ_NAME_LEN];
+    char buffer[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) * LITTLEFS_MAX_DEPTH];
     if (argc == 1) {
         if (!getcwd(buffer, sizeof(buffer) / sizeof(*buffer))) {
             dprintf(spp_fd, "Couldn't determine current working directory: %s!\n", strerror(errno));
@@ -257,7 +257,7 @@ IMPL_COMMAND(cwd) {
 }
 
 IMPL_COMMAND(pwd) {
-    char buffer[CONFIG_LITTLEFS_OBJ_NAME_LEN];
+    char buffer[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) * LITTLEFS_MAX_DEPTH];
     
     if (argc != 1)
         return ESP_ERR_INVALID_ARG;
