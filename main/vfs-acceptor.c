@@ -44,63 +44,17 @@ DECL_COMMAND(mkdir) DECL_COMMAND(rmdir) DECL_COMMAND(ls) DECL_COMMAND(cwd) DECL_
 
 static int spp_fd = -1;
 
-struct vfs_commands {
-    const char *name;
-    const char *usage;
-    esp_err_t (*fn)(int argc, char **argv);
-};
-
 static const struct vfs_commands commands[] = {
-    {
-        .name = "help",
-        .usage = "Usage: help [command_name]\n\tPrints help information about command [command_name].\n", 
-        .fn = &command_help
-    },
-    {
-        .name = "rx",
-        .usage = "Usage: rx [filename]\n\tStarts receiving file [filename] with protocol XMODEM.\n",
-        .fn = &command_rx
-    },
-    {
-        .name = "rm",
-        .usage = "Usage: rm [filename]\n\tRemoves file [filename].\n",
-        .fn = &command_rm
-    },
-    {
-        .name = "mv",
-        .usage = "Usage: mv [src_name] [dst_name]\n\tMoves file or directory [src_name] to [dst_name].\n",
-        .fn = &command_mv
-    },
-    {
-        .name = "cp",
-        .usage = "Usage: cp [src_filename] [dst_filename]\n\tCopies file [src_filename] to [dst_filename].\n",
-        .fn = &command_cp
-    },
-    {
-        .name = "mkdir",
-        .usage = "Usage: mkdir [dirname]\n\tCreates directory [dirname].\n",
-        .fn = &command_mkdir
-    },
-    {
-        .name = "rmdir",
-        .usage = "Usage: rmdir [dirname]\n\tRemoves directory [dirname] (only if it is empty).\n",
-        .fn = &command_rmdir
-    },
-    {
-        .name = "ls",
-        .usage = "Usage: ls [name]\n\tLists files and directories in [name], or only [name] if [name] is a file.\n",
-        .fn = &command_ls
-    },
-    {
-        .name = "cwd",
-        .usage = "Usage: cwd [dirname]\n\tChange current working directory to [dirname]\n",
-        .fn = &command_cwd
-    },
-    {
-        .name = "pwd",
-        .usage = "Usage: pwd\n\tPrints current working directory.\n",
-        .fn = &command_pwd
-    },
+    DEF_COMMAND(help, "[command_name]", "Prints help information about command [command_name].")
+    DEF_COMMAND(rx, "[filename]", "Starts receiving file [filename] with protocol XMODEM.")
+    DEF_COMMAND(rm, "[filename]", "Removes file [filename].")
+    DEF_COMMAND(mv, "[src_name] [dst_name]", "Moves file or directory [src_name] to [dst_name].")
+    DEF_COMMAND(cp, "[src_filename] [dst_filename]", "Copies file [src_filename] to [dst_filename].")
+    DEF_COMMAND(mkdir, "[dirname]", "Creates directory [dirname].")
+    DEF_COMMAND(rmdir, "[dirname]", "Removes directory [dirname] (only if it is empty).")
+    DEF_COMMAND(ls, "[name]", "Lists files and directories in [name], or only [name] if [name] is a file.")
+    DEF_COMMAND(cwd, "[dirname]", "Change current working directory to [dirname]")
+    DEF_COMMAND(pwd, "", "Prints current working directory.")
 };
 
 static inline const struct vfs_commands *find_command(const char *name) {
@@ -113,7 +67,7 @@ static inline const struct vfs_commands *find_command(const char *name) {
     return command;
 }
 
-static esp_err_t command_help(int argc, char **argv) {
+IMPL_COMMAND(help) {
     /* General help. */
     if (argc == 1) {
         dprintf(spp_fd, "Available commands:\n");
@@ -137,7 +91,7 @@ static esp_err_t command_help(int argc, char **argv) {
     return ESP_ERR_INVALID_ARG;
 }
 
-static esp_err_t command_rx(int argc, char **argv) {
+IMPL_COMMAND(rx) {
     int littlefs_fd;
     bool remove_file = false;
     
@@ -169,7 +123,7 @@ static esp_err_t command_rx(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_rm(int argc, char **argv) {
+IMPL_COMMAND(rm) {
     int ret;
     
     if (argc != 2)
@@ -187,7 +141,7 @@ static esp_err_t command_rm(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_mv(int argc, char **argv) {
+IMPL_COMMAND(mv) {
     int ret;
     
     if (argc != 3)
@@ -205,7 +159,7 @@ static esp_err_t command_mv(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_cp(int argc, char **argv) {
+IMPL_COMMAND(cp) {
     int ret;
     
     if (argc != 3)
@@ -223,7 +177,7 @@ static esp_err_t command_cp(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_mkdir(int argc, char **argv) {
+IMPL_COMMAND(mkdir) {
     int ret;
     
     if (argc != 2)
@@ -241,7 +195,7 @@ static esp_err_t command_mkdir(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_rmdir(int argc, char **argv) {
+IMPL_COMMAND(rmdir) {
     int ret;
     
     if (argc != 2)
@@ -259,7 +213,7 @@ static esp_err_t command_rmdir(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_ls(int argc, char **argv) {
+IMPL_COMMAND(ls) {
     char buffer[CONFIG_LITTLEFS_OBJ_NAME_LEN];
     if (argc == 1) {
         if (!getcwd(buffer, sizeof(buffer) / sizeof(*buffer))) {
@@ -289,7 +243,7 @@ static esp_err_t command_ls(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_cwd(int argc, char **argv) {
+IMPL_COMMAND(cwd) {
     if (argc != 2)
         /* Wrong amount of arguments, or first argument isn't a path. */
         return ESP_ERR_INVALID_ARG;
@@ -302,7 +256,7 @@ static esp_err_t command_cwd(int argc, char **argv) {
     return ESP_OK;
 }
 
-static esp_err_t command_pwd(int argc, char **argv) {
+IMPL_COMMAND(pwd) {
     char buffer[CONFIG_LITTLEFS_OBJ_NAME_LEN];
     
     if (argc != 1)
