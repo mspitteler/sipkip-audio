@@ -30,7 +30,6 @@
 #include "esp_spp_api.h"
 #include "esp_random.h"
 #include "driver/i2s_std.h"
-#include "driver/gpio.h"
 #include "driver/dac_continuous.h"
 
 #include "audio.h"
@@ -46,16 +45,15 @@ static const char *const TAG = "sipkip-audio";
 
 static TaskHandle_t dac_write_data_task_handle = NULL;
 
-static volatile bool *gpio_states_changed = NULL;
+static volatile bool exit_dac_write_opus_loop = false;
 static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static bool gpio_output_states[] = {1, 0, 0, 0, 0, 0, 0, 0};
+static volatile bool mode_changed = true;
 
 struct dac_data {
     dac_continuous_handle_t handle;
-    uint8_t *data;
-    size_t data_size;
-    volatile bool buffer_full;
-    volatile bool exit;
+    uint8_t *data_front, *data_back;
+    size_t data_front_size;
 };
 
 struct opus_mem_or_file {
@@ -76,14 +74,21 @@ struct opus_mem_or_file {
     };
 };
 
+enum mode {
+    LEARN,
+    PLAY,
+    MUSIC,
+};
+
 static void dac_write_data_synchronously(void *data) {
     struct dac_data *dac_data = data;
-    ESP_LOGI(TAG, "Audio size %lu bytes, played at frequency %d Hz synchronously", dac_data->data_size, 
+    ESP_LOGI(TAG, "Audio size %lu bytes, playing at frequency %d Hz synchronously", dac_data->data_front_size, 
              OPUS_SAMPLE_RATE);
     for (;;) {
-        if (dac_data->buffer_full) {
-            ESP_ERROR_CHECK(dac_continuous_write(dac_data->handle, dac_data->data, dac_data->data_size, NULL, -1));
-            dac_data->buffer_full = 0;
+        if (dac_data->data_front_size > 0) {
+            ESP_ERROR_CHECK(dac_continuous_write(dac_data->handle, dac_data->data_front, dac_data->data_front_size,
+                                                 NULL, -1));
+            dac_data->data_front_size = 0;
         } else {
             vTaskDelay(10 / portTICK_PERIOD_MS);
         }
@@ -95,33 +100,32 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
     opus_int16 out[OPUS_MAX_FRAME_SIZE];
     bool suspended = true;
 
-    dac_data->buffer_full = 1;
-
     for (int packet_size_index = 0, packet_size_total = 0, packet_size = 0;
-         packet_size_index <= opus_mem_or_file.opus_packets_len / sizeof(short) && !dac_data->exit;
-         packet_size = (opus_mem_or_file.is_mem ? ((short *)opus_mem_or_file.mem.opus_packets)[packet_size_index] : 
-            (fgetc(opus_mem_or_file.file.opus_packets) & 0xFF) | (fgetc(opus_mem_or_file.file.opus_packets) << 8)), 
-            packet_size_index++) {
+         packet_size_index < opus_mem_or_file.opus_packets_len / sizeof(short);
+         packet_size_total += packet_size, packet_size = opus_mem_or_file.is_mem ?
+            ((const short *)opus_mem_or_file.mem.opus_packets)[packet_size_index] : 
+            (fgetc(opus_mem_or_file.file.opus_packets) & 0xFF) | (fgetc(opus_mem_or_file.file.opus_packets) << 8),
+         packet_size_index++) {
         int frame_size;
-        void *buf;
+        void *in;
         bool free_after_decode;
     
         if (packet_size <= 0)
             continue;
 
         if (opus_mem_or_file.is_mem) {
-            buf = (void *)(opus_mem_or_file.mem.opus + packet_size_total);
+            in = (void *)(opus_mem_or_file.mem.opus + packet_size_total);
             free_after_decode = false;
         } else {
             size_t bytes_read;
-            buf = malloc(packet_size);
-            if (!buf) {
+            in = malloc(packet_size);
+            if (!in) {
                 ESP_LOGE(TAG, "Failed to allocate memory for opus input buffer\n");
                 return ESP_FAIL;
             }
-            if ((bytes_read = fread(buf, 1, packet_size, opus_mem_or_file.file.opus)) < packet_size) {
+            if ((bytes_read = fread(in, 1, packet_size, opus_mem_or_file.file.opus)) < packet_size) {
                 ESP_LOGE(TAG, "Opus file is too short, read %lu, while expecting %d", bytes_read, packet_size);
-                free(buf);
+                free(in);
                 return ESP_FAIL;
             }
                 
@@ -133,25 +137,33 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
          * a constant frame size. However, that may not be the case for all encoders,so the decoder must always check 
          * the frame size returned.
          */
-        frame_size = opus_decode(decoder, buf, packet_size, out, OPUS_MAX_FRAME_SIZE, 0);
+        frame_size = opus_decode(decoder, in, packet_size, out, OPUS_MAX_FRAME_SIZE, 0);
         
         /* Free memory if apliccable. */
         if (free_after_decode)
-            free(buf);
+            free(in);
         
         if (frame_size < 0) {
             ESP_LOGE(TAG, "Decoder failed: %s\n", opus_strerror(frame_size));
             return ESP_FAIL;
         }
-       
-        while (dac_write_data_task_handle && !suspended && dac_data->buffer_full)
-            vTaskDelay(10 / portTICK_PERIOD_MS);
+      
         /* Convert to 8-bit. */
         for (int i = 0; i < frame_size; i++)
-            dac_data->data[i] = ((out[i] + 32768) >> 8) & 0xFF;
+            dac_data->data_back[i] = ((out[i] + 32768) >> 8) & 0xFF;
         
-        dac_data->data_size = sizeof(*dac_data->data) * frame_size;
-        dac_data->buffer_full = 1;
+        while (dac_write_data_task_handle && !suspended && dac_data->data_front_size)
+            vTaskDelay(10 / portTICK_PERIOD_MS);
+        
+        if (exit_dac_write_opus_loop)
+            break;
+        
+        /* Swap front and back buffer. */
+        uint8_t *data_tmp = dac_data->data_front;
+        
+        dac_data->data_front = dac_data->data_back;
+        dac_data->data_front_size = sizeof(*dac_data->data_front) * frame_size;
+        dac_data->data_back = data_tmp;
         
         if (!dac_write_data_task_handle) {
             xTaskCreate(&dac_write_data_synchronously, "DAC write data", 2048, dac_data, 10, 
@@ -160,8 +172,6 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
             vTaskResume(dac_write_data_task_handle);
             suspended = false;
         }
-        
-        packet_size_total += packet_size;
     }
 
     vTaskSuspend(dac_write_data_task_handle);
@@ -169,14 +179,14 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
     return ESP_OK;
 }
 
-static void on_gpio_states_changed(volatile bool (*states)[19]) {
+/* Called from interrupt, so should be placed in IRAM. */
+static void IRAM_ATTR on_gpio_states_changed(volatile bool (*states)[19]) {
     for (int i = 0; i < sizeof(*states); i++) {
         if ((*states)[i])
             gpio_states[i] = true;
         (*states)[i] = false;
     }
-    if (gpio_states_changed)
-        *gpio_states_changed = true;
+    exit_dac_write_opus_loop = true;
 }
 
 /**
@@ -243,7 +253,7 @@ static int play_littlefs_opus_file(OpusDecoder *decoder, struct dac_data *dac_da
     char opus_path[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) * LITTLEFS_MAX_DEPTH];
     char opus_packets_path[(CONFIG_LITTLEFS_OBJ_NAME_LEN + 1) * LITTLEFS_MAX_DEPTH];
     
-    sprintf(opus_path, "%s-*.opus", starts_with);
+    sprintf(opus_path, "%s*.opus", starts_with);
     switch (g_glob(opus_path, GLOB_ERR, NULL, &glob_buf)) {
         case GLOB_NOMATCH:
             ESP_LOGW(TAG, "No files matching pattern \"%s\" present on LITTLEFS partition", opus_path);
@@ -282,8 +292,50 @@ static int play_littlefs_opus_file(OpusDecoder *decoder, struct dac_data *dac_da
     return 0;
 }
 
-static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
+static void mode_learn(OpusDecoder *decoder, struct dac_data *dac_data) {
+    if (mode_changed) {
+        switch (esp_random() % 2) {
+            case 0:
+                DAC_WRITE_OPUS(__leren_laten_we_ontdekken_en_leren__met_mijn_prachtige_veren__opus, mem,
+                               decoder, dac_data);
+                break;
+            case 1:
+                DAC_WRITE_OPUS(__leren_laten_we_eens_kijken_of_je_deze_vragen_kunt_beantwoorden_opus, mem,
+                               decoder, dac_data);
+                break;
+        }
+        mode_changed = false;
+    }
+}
+
+static void mode_play(OpusDecoder *decoder, struct dac_data *dac_data) {
+    if (mode_changed) {
+        switch (esp_random() % 3) {
+            case 0:
+                DAC_WRITE_OPUS(__spelen_groep_1_druk_op_een_toets_of_plaats_een_knijper_om_te_spelen_opus, mem, 
+                               decoder, dac_data);
+                break;
+            case 1:
+                DAC_WRITE_OPUS(__spelen_groep_1_hoi__ik_ben_een_sierlijke_pauw__laten_we_spelen__hoeraa___opus, mem, 
+                               decoder, dac_data);
+                break;
+            case 2:
+                DAC_WRITE_OPUS(__spelen_groep_1_laten_we_ontdekken_en_leren__met_mijn_prachtige_veren__opus, mem, 
+                               decoder, dac_data);
+                break;
+        }
+        mode_changed = false;
+    }
+}
+
+static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
     static bool even = false;
+    
+    if (mode_changed) {
+        DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, 
+                       decoder, dac_data);
+        mode_changed = false;
+    }
     
     if (gpio_states[MUXED_INPUT_HEART_L_BUTTON] || 
         gpio_states[MUXED_INPUT_HEART_R_BUTTON]) {
@@ -298,7 +350,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[MUXED_INPUT_HEART_L_CLIP] || 
         gpio_states[MUXED_INPUT_HEART_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/1");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/heart_clip/");
         gpio_states[MUXED_INPUT_HEART_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_HEART_R_CLIP] = 0;
     }
@@ -315,7 +367,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[MUXED_INPUT_SQUARE_L_CLIP] || 
         gpio_states[MUXED_INPUT_SQUARE_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/2");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/square_clip/");
         gpio_states[MUXED_INPUT_SQUARE_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_SQUARE_R_CLIP] = 0;
     }
@@ -332,7 +384,7 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] || 
         gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/3");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/triangle_clip/");
         gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP] = 0;
     }
@@ -349,12 +401,12 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
     }
     if (gpio_states[MUXED_INPUT_STAR_L_CLIP] || 
         gpio_states[MUXED_INPUT_STAR_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/4");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/star_clip/");
         gpio_states[MUXED_INPUT_STAR_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_STAR_R_CLIP] = 0;
     }
     if (gpio_states[MUXED_INPUT_BEAK_SWITCH]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/b");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/beak_switch/");
         if (even)
             DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
                             decoder, dac_data);
@@ -364,13 +416,19 @@ static void play_opus_files(OpusDecoder *decoder, struct dac_data *dac_data) {
         gpio_states[MUXED_INPUT_BEAK_SWITCH] = 0;
         even = !even;
     }
+    
+    for (int i = 0; i < 8; i++)
+        if (gpio_output_states[i]) {
+            gpio_output_states[i] = 0;
+            gpio_output_states[(i + 1) & 7] = 1;
+            break;
+        }
 }
 
 void app_main(void) {
     OpusDecoder *decoder;
     int err;
-
-    unsigned char *pcm_bytes;
+    enum mode mode = MUSIC;
 
     dac_continuous_handle_t dac_handle;
     dac_continuous_config_t cont_cfg = {
@@ -521,44 +579,59 @@ void app_main(void) {
         return;
     }
     
-    pcm_bytes = malloc(OPUS_MAX_FRAME_SIZE);
-    if (!pcm_bytes) {
-        ESP_LOGE(TAG, "Failed to allocate memory for dac output buffer\n");
-        return;
-    }
-
     struct dac_data dac_data = {
         .handle = dac_handle,
-        .data = pcm_bytes,
+        .data_front = malloc(OPUS_MAX_FRAME_SIZE),
+        .data_back = malloc(OPUS_MAX_FRAME_SIZE),
+        .data_front_size = 0
     };
-    /* Set dac_data->exit to true when one of the gpio states has changed. */
-    gpio_states_changed = &dac_data.exit;
-   
-    DAC_WRITE_OPUS(__muziek______tijd_voor_muziek__druk_op_een_toets_om_naar_muziek_te_luisteren_opus, mem, 
-                   decoder, &dac_data);
+
+    if (!dac_data.data_front || !dac_data.data_back) {
+        ESP_LOGE(TAG, "Failed to allocate memory for dac output buffers\n");
+        return;
+    }
     
     muxed_gpio_setup(&on_gpio_states_changed);
+   
+    DAC_WRITE_OPUS(__pauw_opstart_geluid_opus, mem, decoder, &dac_data);
+    DAC_WRITE_OPUS(
+        _______hallo_ik_ben_een_pauw__kom_speel_je_mee_met_mij_want_samen_zijn_met_jou__dat_maakt_me_reuze_blij_opus, 
+        mem, decoder, &dac_data);
 
     /* Format the littlefs partition if the beak button is pressed for 5 seconds. */
-    if (gpio_get_level(GPIO_NUM_15)) {
+    bool input_switch_levels[19];
+    muxed_gpio_get_input_switch_levels(&input_switch_levels);
+    if (input_switch_levels[MUXED_INPUT_BEAK_SWITCH]) {
         vTaskDelay(LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT / portTICK_PERIOD_MS);
-        if (gpio_get_level(GPIO_NUM_15)) {
+        muxed_gpio_get_input_switch_levels(&input_switch_levels);
+        if (input_switch_levels[MUXED_INPUT_BEAK_SWITCH]) {
             ESP_LOGW(TAG, "Pressed the beak button for %d seconds. Formatting...",
                      LITTLEFS_FORMAT_BEAK_PRESSED_TIMEOUT / 1000);
             esp_littlefs_format(conf.partition_label);
         }
     }
     
+    if (input_switch_levels[MUXED_INPUT_LEARN_SWITCH])
+        mode = LEARN;
+    else if (input_switch_levels[MUXED_INPUT_PLAY_SWITCH])
+        mode = PLAY;
+    else
+        mode = MUSIC;
+    
     for (;;) {
-        *gpio_states_changed = false;
-        play_opus_files(decoder, &dac_data);
+        exit_dac_write_opus_loop = false;
         
-        for (int i = 0; i < 8; i++)
-            if (gpio_output_states[i]) {
-                gpio_output_states[i] = 0;
-                gpio_output_states[(i + 1) & 7] = 1;
+        switch (mode) {
+            case LEARN:
+                mode_learn(decoder, &dac_data);
                 break;
-            }
+            case PLAY:
+                mode_play(decoder, &dac_data);
+                break;
+            case MUSIC:
+                mode_music(decoder, &dac_data);
+                break;
+        }
         
         muxed_gpio_set_output_levels(&gpio_output_states);
         vTaskDelay(100 / portTICK_PERIOD_MS);
@@ -569,7 +642,12 @@ void app_main(void) {
     esp_vfs_littlefs_unregister(conf.partition_label);
     ESP_LOGI(TAG, "LITTLEFS unmounted");
     
-    free(pcm_bytes);
+    opus_decoder_destroy(decoder);
+    
+    free(dac_data.data_front);
+    free(dac_data.data_back);
+    
+    spp_task_task_shut_down();
   
     ESP_LOGI(TAG, "Done!\n");
     return;

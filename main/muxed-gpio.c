@@ -25,7 +25,7 @@
 #define GPIO_NUM_BEAK_IN          GPIO_NUM_15
 /* These are the inputs for the switch. */
 #define GPIO_NUM_SWITCH_LEARN_IN  GPIO_NUM_34
-#define GPIO_NUM_SWITCH_MUSIC_IN  GPIO_NUM_35
+#define GPIO_NUM_SWITCH_PLAY_IN   GPIO_NUM_35
 /* These are the outputs for the LEDs. */
 #define GPIO_NUM_LED_L_OUT        GPIO_NUM_22
 #define GPIO_NUM_LED_M_OUT        GPIO_NUM_26
@@ -39,7 +39,7 @@
                                    (1ULL << GPIO_NUM_HEART_R_INOUT)    | (1ULL << GPIO_NUM_SQUARE_R_INOUT)   |     \
                                    (1ULL << GPIO_NUM_TRIANGLE_R_INOUT) | (1ULL << GPIO_NUM_STAR_R_INOUT))
 #define GPIO_PIN_BIT_MASK_IN      ((1ULL << GPIO_NUM_BEAK_IN)          | (1ULL << GPIO_NUM_SWITCH_LEARN_IN)  |     \
-                                   (1ULL << GPIO_NUM_SWITCH_MUSIC_IN))
+                                   (1ULL << GPIO_NUM_SWITCH_PLAY_IN))
 
 #define MUX_PWM_FREQUENCY   200UL                    /* 200 Hz. */
 #define MUX_PWM_BITS        8                        /* Dutycycle is max 255. */
@@ -64,7 +64,7 @@ static const enum muxed_inputs gpio_num_to_muxed_inouts[][GPIO_NUM_MAX] = {{
     [GPIO_NUM_TRIANGLE_R_INOUT] = MUXED_INPUT_TRIANGLE_R_BUTTON, [GPIO_NUM_STAR_R_INOUT] = MUXED_INPUT_STAR_R_BUTTON,
     /* 8..15 are inputs for the clips that can be read if GPIO_NUM_MUX_CLIPS_OUT is set high. */
     [GPIO_NUM_BEAK_IN] = MUXED_INPUT_BEAK_SWITCH,
-    [GPIO_NUM_SWITCH_LEARN_IN] = MUXED_INPUT_LEARN_SWITCH, [GPIO_NUM_SWITCH_MUSIC_IN] = MUXED_INPUT_MUSIC_SWITCH
+    [GPIO_NUM_SWITCH_LEARN_IN] = MUXED_INPUT_LEARN_SWITCH, [GPIO_NUM_SWITCH_PLAY_IN] = MUXED_INPUT_PLAY_SWITCH
 }, {
     /* 0..7 are inputs for the buttons that can be read if GPIO_NUM_MUX_BUTTONS_OUT is set high. */
     [GPIO_NUM_STAR_L_INOUT] = MUXED_INPUT_STAR_L_CLIP, [GPIO_NUM_TRIANGLE_L_INOUT] = MUXED_INPUT_TRIANGLE_L_CLIP,
@@ -73,7 +73,7 @@ static const enum muxed_inputs gpio_num_to_muxed_inouts[][GPIO_NUM_MAX] = {{
     [GPIO_NUM_TRIANGLE_R_INOUT] = MUXED_INPUT_TRIANGLE_R_CLIP, [GPIO_NUM_STAR_R_INOUT] = MUXED_INPUT_STAR_R_CLIP,
     /* 8..15 are inputs for the clips that can be read if GPIO_NUM_MUX_CLIPS_OUT is set high. */
     [GPIO_NUM_BEAK_IN] = MUXED_INPUT_BEAK_SWITCH,
-    [GPIO_NUM_SWITCH_LEARN_IN] = MUXED_INPUT_LEARN_SWITCH, [GPIO_NUM_SWITCH_MUSIC_IN] = MUXED_INPUT_MUSIC_SWITCH
+    [GPIO_NUM_SWITCH_LEARN_IN] = MUXED_INPUT_LEARN_SWITCH, [GPIO_NUM_SWITCH_PLAY_IN] = MUXED_INPUT_PLAY_SWITCH
 }};
 static const gpio_num_t muxed_inouts_to_gpio_num[] = {
     /* 0..7 are inputs for the buttons that can be read if GPIO_NUM_MUX_BUTTONS_OUT is set high. */
@@ -88,7 +88,7 @@ static const gpio_num_t muxed_inouts_to_gpio_num[] = {
     [MUXED_INPUT_TRIANGLE_R_CLIP] = GPIO_NUM_TRIANGLE_R_INOUT, [MUXED_INPUT_STAR_R_CLIP] = GPIO_NUM_STAR_R_INOUT,
     /* The following GPIOs are only ever used as inputs. */
     [MUXED_INPUT_BEAK_SWITCH] = GPIO_NUM_BEAK_IN,
-    [MUXED_INPUT_LEARN_SWITCH] = GPIO_NUM_SWITCH_LEARN_IN, [MUXED_INPUT_MUSIC_SWITCH] = GPIO_NUM_SWITCH_MUSIC_IN
+    [MUXED_INPUT_LEARN_SWITCH] = GPIO_NUM_SWITCH_LEARN_IN, [MUXED_INPUT_PLAY_SWITCH] = GPIO_NUM_SWITCH_PLAY_IN
 };
 
 /*                          { GPIO_NUM_LED_*_OUT, GPIO_NUM_*_*_INOUT } */
@@ -330,4 +330,9 @@ void muxed_gpio_set_output_levels(bool (*levels)[MUXED_OUTPUT_N]) {
         ledc_set_duty(ledc_channel_configs[0].speed_mode, i, bc_channel_on[i] ? ledc_channel_configs[0].duty : 0);
         ledc_update_duty(ledc_channel_configs[0].speed_mode, i);
     }
+}
+
+void muxed_gpio_get_input_switch_levels(bool (*levels)[MUXED_INPUT_N]) {
+    for (enum muxed_inputs i = MUXED_INPUT_SWITCH_MIN; i <= MUXED_INPUT_SWITCH_MAX; i++)
+        (*levels)[i] = gpio_get_level(muxed_inouts_to_gpio_num[i]);
 }

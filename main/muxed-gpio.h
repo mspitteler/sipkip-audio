@@ -36,9 +36,9 @@ enum muxed_inputs {
     /* Switches. */
     MUXED_INPUT_BEAK_SWITCH = MUXED_INPUT_SWITCH_MIN, /* 16 */
     MUXED_INPUT_LEARN_SWITCH,
-    MUXED_INPUT_MUSIC_SWITCH,
+    MUXED_INPUT_PLAY_SWITCH,
     
-    MUXED_INPUT_SWITCH_MAX = MUXED_INPUT_MUSIC_SWITCH,
+    MUXED_INPUT_SWITCH_MAX = MUXED_INPUT_PLAY_SWITCH,
     MUXED_INPUT_MAX = MUXED_INPUT_SWITCH_MAX, /* 18 */
     
     MUXED_INPUT_N /* 19 */
@@ -67,5 +67,6 @@ typedef void (*muxed_inputs_on_changed_fn)(volatile bool (*)[MUXED_INPUT_N]);
 
 void muxed_gpio_setup(muxed_inputs_on_changed_fn fn);
 void muxed_gpio_set_output_levels(bool (*levels)[MUXED_OUTPUT_N]);
+void muxed_gpio_get_input_switch_levels(bool (*levels)[MUXED_INPUT_N]);
 
 #endif /* MUXED_GPIO_H */
