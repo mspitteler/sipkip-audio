@@ -45,10 +45,18 @@ static const char *const TAG = "sipkip-audio";
 
 static TaskHandle_t dac_write_data_task_handle = NULL;
 
+enum mode {
+    LEARN,
+    PLAY,
+    MUSIC,
+};
+
+static volatile enum mode mode = MUSIC;
+static volatile bool mode_changed = true;
+
 static volatile bool exit_dac_write_opus_loop = false;
 static volatile bool gpio_states[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 static bool gpio_output_states[] = {1, 0, 0, 0, 0, 0, 0, 0};
-static volatile bool mode_changed = true;
 
 struct dac_data {
     dac_continuous_handle_t handle;
@@ -72,12 +80,6 @@ struct opus_mem_or_file {
             FILE *opus_packets;
         } file;
     };
-};
-
-enum mode {
-    LEARN,
-    PLAY,
-    MUSIC,
 };
 
 static void dac_write_data_synchronously(void *data) {
@@ -181,12 +183,26 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
 
 /* Called from interrupt, so should be placed in IRAM. */
 static void IRAM_ATTR on_gpio_states_changed(volatile bool (*states)[19]) {
+    bool input_switch_levels[19];
+    enum mode new_mode;
+    
     for (int i = 0; i < sizeof(*states); i++) {
         if ((*states)[i]) {
             gpio_states[i] = 1;
             exit_dac_write_opus_loop = true;
         }
     }
+    muxed_gpio_get_input_switch_levels(&input_switch_levels);
+    if (input_switch_levels[MUXED_INPUT_LEARN_SWITCH])
+        new_mode = LEARN;
+    else if (input_switch_levels[MUXED_INPUT_PLAY_SWITCH])
+        new_mode = PLAY;
+    else
+        new_mode = MUSIC;
+    
+    if (new_mode != mode)
+        mode_changed = true;
+    mode = new_mode;
 }
 
 /**
@@ -428,7 +444,6 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
 void app_main(void) {
     OpusDecoder *decoder;
     int err;
-    enum mode mode = MUSIC;
 
     dac_continuous_handle_t dac_handle;
     dac_continuous_config_t cont_cfg = {
