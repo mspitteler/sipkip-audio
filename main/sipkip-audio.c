@@ -182,11 +182,11 @@ static esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file, OpusDe
 /* Called from interrupt, so should be placed in IRAM. */
 static void IRAM_ATTR on_gpio_states_changed(volatile bool (*states)[19]) {
     for (int i = 0; i < sizeof(*states); i++) {
-        if ((*states)[i])
-            gpio_states[i] = true;
-        (*states)[i] = false;
+        if ((*states)[i]) {
+            gpio_states[i] = 1;
+            exit_dac_write_opus_loop = true;
+        }
     }
-    exit_dac_write_opus_loop = true;
 }
 
 /**
@@ -339,73 +339,74 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
     
     if (gpio_states[MUXED_INPUT_HEART_L_BUTTON] || 
         gpio_states[MUXED_INPUT_HEART_R_BUTTON]) {
+        gpio_states[MUXED_INPUT_HEART_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_HEART_R_BUTTON] = 0;
         DAC_WRITE_OPUS(__muziek_ik_ben_zo_blij__opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_5_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_blije_muziekjes_muziekje_6_opus, mem, decoder, dac_data);
-        gpio_states[MUXED_INPUT_HEART_L_BUTTON] = 0;
-        gpio_states[MUXED_INPUT_HEART_R_BUTTON] = 0;
         even = !even;
     }
     if (gpio_states[MUXED_INPUT_HEART_L_CLIP] || 
         gpio_states[MUXED_INPUT_HEART_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/heart_clip/");
         gpio_states[MUXED_INPUT_HEART_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_HEART_R_CLIP] = 0;
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/heart_clip/");
     }
     if (gpio_states[MUXED_INPUT_SQUARE_L_BUTTON] || 
         gpio_states[MUXED_INPUT_SQUARE_R_BUTTON]) {
+        gpio_states[MUXED_INPUT_SQUARE_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_SQUARE_R_BUTTON] = 0;
         DAC_WRITE_OPUS(__muziek_ik_voel_me_een_beetje_verdrietig_opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_7_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_verdrietige_muziekjes_muziekje_8_opus, mem, decoder, dac_data);
-        gpio_states[MUXED_INPUT_SQUARE_L_BUTTON] = 0;
-        gpio_states[MUXED_INPUT_SQUARE_R_BUTTON] = 0;
         even = !even;
     }
     if (gpio_states[MUXED_INPUT_SQUARE_L_CLIP] || 
         gpio_states[MUXED_INPUT_SQUARE_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/square_clip/");
         gpio_states[MUXED_INPUT_SQUARE_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_SQUARE_R_CLIP] = 0;
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/square_clip/");
     }
     if (gpio_states[MUXED_INPUT_TRIANGLE_L_BUTTON] || 
         gpio_states[MUXED_INPUT_TRIANGLE_R_BUTTON]) {
+        gpio_states[MUXED_INPUT_TRIANGLE_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_TRIANGLE_R_BUTTON] = 0;
         DAC_WRITE_OPUS(__muziek_ik_ben_boos__opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_3_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_boze_muziekjes_muziekje_4_opus, mem, decoder, dac_data);
-        gpio_states[MUXED_INPUT_TRIANGLE_L_BUTTON] = 0;
-        gpio_states[MUXED_INPUT_TRIANGLE_R_BUTTON] = 0;
         even = !even;
     }
     if (gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] || 
         gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/triangle_clip/");
         gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP] = 0;
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/triangle_clip/");
     }
     if (gpio_states[MUXED_INPUT_STAR_L_BUTTON] || 
         gpio_states[MUXED_INPUT_STAR_R_BUTTON]) {
+        gpio_states[MUXED_INPUT_STAR_L_BUTTON] = 0;
+        gpio_states[MUXED_INPUT_STAR_R_BUTTON] = 0;
         DAC_WRITE_OPUS(__muziek_wat_een_verassing__opus, mem, decoder, dac_data);
         if (even)
             DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_1_opus, mem, decoder, dac_data);
         else
             DAC_WRITE_OPUS(__muziek_verbaasde_muziekjes_muziekje_2_opus, mem, decoder, dac_data);
-        gpio_states[MUXED_INPUT_STAR_L_BUTTON] = 0;
-        gpio_states[MUXED_INPUT_STAR_R_BUTTON] = 0;
         even = !even;
     }
     if (gpio_states[MUXED_INPUT_STAR_L_CLIP] || 
         gpio_states[MUXED_INPUT_STAR_R_CLIP]) {
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/star_clip/");
         gpio_states[MUXED_INPUT_STAR_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_STAR_R_CLIP] = 0;
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/star_clip/");
     }
     if (gpio_states[MUXED_INPUT_BEAK_SWITCH]) {
+        gpio_states[MUXED_INPUT_BEAK_SWITCH] = 0;
         play_littlefs_opus_file(decoder, dac_data, "/littlefs/beak_switch/");
         if (even)
             DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
@@ -413,7 +414,6 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
         else
             DAC_WRITE_OPUS(__muziek_snavel_knop_wil_je_mij_horen_zingen___muziekje_10_opus, mem, 
                             decoder, dac_data);
-        gpio_states[MUXED_INPUT_BEAK_SWITCH] = 0;
         even = !even;
     }
     

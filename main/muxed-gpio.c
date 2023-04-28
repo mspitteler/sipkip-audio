@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "soc/ledc_periph.h"
+#include "esp_cpu.h"
 
 #include "muxed-gpio.h"
 
@@ -108,10 +109,10 @@ static const struct { ledc_channel_t lmr_channel, bc_channel; } muxed_inouts_to_
  * GPIO_NUM_LED_*_OUT:       |   |             |      |             |      |             |      |
  *                           |    ^^^^^^^^^^^^^        ^^^^^^^^^^^^^        ^^^^^^^^^^^^^        ^^^
  *                           |    ______               ______               ______               ___
- * GPIO_NUM_MUX_BUTTONS_OUT: |   |      |             |      |             |      |             |
+ * GPIO_NUM_MUX_CLIPS_OUT:   |   |      |             |      |             |      |             |
  *                           |^^^        ^^^^^^^^^^^^^        ^^^^^^^^^^^^^        ^^^^^^^^^^^^^
  *                           |           ______               ______               ______
- * GPIO_NUM_MUX_CLIPS_OUT:   |          |      |             |      |             |      |
+ * GPIO_NUM_MUX_BUTTONS_OUT: |          |      |             |      |             |      |
  *                           |^^^^^^^^^^        ^^^^^^^^^^^^^       ^^^^^^^^^^^^^^        ^^^^^^^^^^
  */
 
@@ -160,7 +161,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_MUX_BUTTONS_OUT,
         .duty           = MUX_PWM_MAX / 3,
-        .hpoint         = MUX_PWM_MAX / 3, /* Set the timer value at which the output will be latched. */
+        .hpoint         = MUX_PWM_MAX * 2 / 3, /* Set the timer value at which the output will be latched. */
     },
     {
         .speed_mode     = LEDC_HIGH_SPEED_MODE,
@@ -169,7 +170,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_MUX_CLIPS_OUT,
         .duty           = MUX_PWM_MAX / 3,
-        .hpoint         = MUX_PWM_MAX * 2 / 3, /* Set the timer value at which the output will be latched. */
+        .hpoint         = MUX_PWM_MAX / 3, /* Set the timer value at which the output will be latched. */
     }
 };
 
@@ -210,17 +211,26 @@ static const gpio_config_t gpio_configs[] = {
 };
 
 static void IRAM_ATTR gpio_buttons_and_clips_interrupt_handler(void *arg) {
+    static esp_cpu_cycle_count_t last_cycle_count[MUXED_INPUT_N];
     /* Get input from buttons if true, and from clips if false. */
     bool muxed_input_buttons;
     struct interrupt_handler_args *args = arg;
+    esp_cpu_cycle_count_t cycle_count = esp_cpu_get_cycle_count();
     
     if ((muxed_input_buttons = gpio_get_level(GPIO_NUM_MUX_BUTTONS_OUT)) || gpio_get_level(GPIO_NUM_MUX_CLIPS_OUT)) {
+        enum muxed_inputs muxed_inouts = gpio_num_to_muxed_inouts[!muxed_input_buttons][args->gpio_num];
+        uint32_t difference = cycle_count - last_cycle_count[muxed_inouts];
+
+        last_cycle_count[muxed_inouts] = cycle_count;
+        /* 1.1 times difference in time that it takes for the interrupt to be triggered if a button is kept pressed. */
+        if (difference <= (configCPU_CLOCK_HZ / MUX_PWM_FREQUENCY / 100UL * 110UL))
+            return;
         /* Get input. */
         bool level;
-        if (muxed_input_levels[gpio_num_to_muxed_inouts[!muxed_input_buttons][args->gpio_num]]
-            != (level = gpio_get_level(args->gpio_num))) {
-            muxed_input_levels[gpio_num_to_muxed_inouts[!muxed_input_buttons][args->gpio_num]] = level;
+        if (muxed_input_levels[muxed_inouts] != (level = gpio_get_level(args->gpio_num))) {
+            muxed_input_levels[muxed_inouts] = level;
             args->fn(&muxed_input_levels);
+            muxed_input_levels[muxed_inouts] = 0;
         }
     }
 }
@@ -233,6 +243,7 @@ static void IRAM_ATTR gpio_switches_interrupt_handler(void *arg) {
     if (muxed_input_levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] != (level = gpio_get_level(args->gpio_num))) {
         muxed_input_levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] = level;
         args->fn(&muxed_input_levels);
+        muxed_input_levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] = 0;
     }
 }
 
