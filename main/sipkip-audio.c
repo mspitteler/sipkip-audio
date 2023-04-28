@@ -590,13 +590,13 @@ void app_main(void) {
         ESP_LOGE(TAG, "Failed to allocate memory for dac output buffers\n");
         return;
     }
-    
-    muxed_gpio_setup(&on_gpio_states_changed);
    
     DAC_WRITE_OPUS(__pauw_opstart_geluid_opus, mem, decoder, &dac_data);
     DAC_WRITE_OPUS(
         _______hallo_ik_ben_een_pauw__kom_speel_je_mee_met_mij_want_samen_zijn_met_jou__dat_maakt_me_reuze_blij_opus, 
         mem, decoder, &dac_data);
+    
+    muxed_gpio_setup(&on_gpio_states_changed);
 
     /* Format the littlefs partition if the beak button is pressed for 5 seconds. */
     bool input_switch_levels[19];
