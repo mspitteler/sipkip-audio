@@ -368,7 +368,7 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
         gpio_states[MUXED_INPUT_HEART_R_CLIP]) {
         gpio_states[MUXED_INPUT_HEART_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_HEART_R_CLIP] = 0;
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/heart_clip/");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/music/heart_clip/");
     }
     if (gpio_states[MUXED_INPUT_SQUARE_L_BUTTON] || 
         gpio_states[MUXED_INPUT_SQUARE_R_BUTTON]) {
@@ -385,7 +385,7 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
         gpio_states[MUXED_INPUT_SQUARE_R_CLIP]) {
         gpio_states[MUXED_INPUT_SQUARE_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_SQUARE_R_CLIP] = 0;
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/square_clip/");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/music/square_clip/");
     }
     if (gpio_states[MUXED_INPUT_TRIANGLE_L_BUTTON] || 
         gpio_states[MUXED_INPUT_TRIANGLE_R_BUTTON]) {
@@ -402,7 +402,7 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
         gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP]) {
         gpio_states[MUXED_INPUT_TRIANGLE_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_TRIANGLE_R_CLIP] = 0;
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/triangle_clip/");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/music/triangle_clip/");
     }
     if (gpio_states[MUXED_INPUT_STAR_L_BUTTON] || 
         gpio_states[MUXED_INPUT_STAR_R_BUTTON]) {
@@ -419,11 +419,11 @@ static void mode_music(OpusDecoder *decoder, struct dac_data *dac_data) {
         gpio_states[MUXED_INPUT_STAR_R_CLIP]) {
         gpio_states[MUXED_INPUT_STAR_L_CLIP] = 0;
         gpio_states[MUXED_INPUT_STAR_R_CLIP] = 0;
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/star_clip/");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/music/star_clip/");
     }
     if (gpio_states[MUXED_INPUT_BEAK_SWITCH]) {
         gpio_states[MUXED_INPUT_BEAK_SWITCH] = 0;
-        play_littlefs_opus_file(decoder, dac_data, "/littlefs/beak_switch/");
+        play_littlefs_opus_file(decoder, dac_data, "/littlefs/music/beak_switch/");
         if (even)
             DAC_WRITE_OPUS(__muziek_snavel_knop_het_is_tijd_om_te_zingen___muziekje_9_opus, mem, 
                             decoder, dac_data);
