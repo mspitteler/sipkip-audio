@@ -236,7 +236,7 @@ IMPL_COMMAND(ls) {
         if (!de)
             break;
         
-        dprintf(spp_fd, "%s\n", de->d_name);
+        dprintf(spp_fd, "%s%s\n", de->d_name, &"/"[de->d_type != DT_DIR]); /* Print trailing `/' if it's a directory. */
     }
 
     closedir(dir);
