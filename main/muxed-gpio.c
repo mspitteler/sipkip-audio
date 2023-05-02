@@ -133,7 +133,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .timer_sel      = LEDC_TIMER_0,
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_LED_L_OUT,
-        .duty           = MUX_PWM_MAX / 3,
+        .duty           = MUX_PWM_MAX / 3 - 2, /* Leave 2 / MUX_PWM_MAXth of the dutycycle as margin. */
         .hpoint         = 0 /* Set the timer value at which the output will be latched. */
     },
     {
@@ -142,7 +142,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .timer_sel      = LEDC_TIMER_0,
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_LED_M_OUT,
-        .duty           = MUX_PWM_MAX / 3,
+        .duty           = MUX_PWM_MAX / 3 - 2, /* Leave 2 / MUX_PWM_MAXth of the dutycycle as margin. */
         .hpoint         = 0 /* Set the timer value at which the output will be latched. */
     },
     {
@@ -151,7 +151,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .timer_sel      = LEDC_TIMER_0,
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_LED_R_OUT,
-        .duty           = MUX_PWM_MAX / 3,
+        .duty           = MUX_PWM_MAX / 3 - 2, /* Leave 2 / MUX_PWM_MAXth of the dutycycle as margin. */
         .hpoint         = 0 /* Set the timer value at which the output will be latched. */
     },
     {
@@ -160,7 +160,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .timer_sel      = LEDC_TIMER_0,
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_MUX_BUTTONS_OUT,
-        .duty           = MUX_PWM_MAX / 3,
+        .duty           = MUX_PWM_MAX / 3 - 2, /* Leave 2 / MUX_PWM_MAXth of the dutycycle as margin. */
         .hpoint         = MUX_PWM_MAX * 2 / 3, /* Set the timer value at which the output will be latched. */
     },
     {
@@ -169,7 +169,7 @@ static const ledc_channel_config_t ledc_channel_configs[] = {
         .timer_sel      = LEDC_TIMER_0,
         .intr_type      = LEDC_INTR_DISABLE,
         .gpio_num       = GPIO_NUM_MUX_CLIPS_OUT,
-        .duty           = MUX_PWM_MAX / 3,
+        .duty           = MUX_PWM_MAX / 3 - 2, /* Leave 2 / MUX_PWM_MAXth of the dutycycle as margin. */
         .hpoint         = MUX_PWM_MAX / 3, /* Set the timer value at which the output will be latched. */
     }
 };
