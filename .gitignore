@@ -4,6 +4,8 @@ audio/*.h
 audio/*/*.h
 audio/*/*/*.h
 audio/*/*/*/*.h
+main/audio.h
+main/audio_identifiers.cmake
 **/*.kdev4
 CMakeCache.txt
 build/
