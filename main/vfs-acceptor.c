@@ -39,7 +39,7 @@ static const char *const TAG = "vfs-acceptor";
 static const esp_spp_sec_t sec_mask = ESP_SPP_SEC_AUTHENTICATE;
 static const esp_spp_role_t role_slave = ESP_SPP_ROLE_SLAVE;
 
-DECL_COMMAND(help) DECL_COMMAND(rx) DECL_COMMAND(rm) DECL_COMMAND(mv) DECL_COMMAND(cp)
+DECL_COMMAND(help) DECL_COMMAND(rx) DECL_COMMAND(rm) DECL_COMMAND(mv) DECL_COMMAND(cp) DECL_COMMAND(speak)
 DECL_COMMAND(mkdir) DECL_COMMAND(rmdir) DECL_COMMAND(ls) DECL_COMMAND(cwd) DECL_COMMAND(pwd)
 
 static int spp_fd = -1;
@@ -50,6 +50,7 @@ static const struct vfs_commands commands[] = {
     DEF_COMMAND(rm, "[filename]", "Removes file [filename].")
     DEF_COMMAND(mv, "[src_name] [dst_name]", "Moves file or directory [src_name] to [dst_name].")
     DEF_COMMAND(cp, "[src_filename] [dst_filename]", "Copies file [src_filename] to [dst_filename].")
+    DEF_COMMAND(speak, "[opus_filename] [opus_packets_filename]", "Plays the opus stream contained in [opus_filename]")
     DEF_COMMAND(mkdir, "[dirname]", "Creates directory [dirname].")
     DEF_COMMAND(rmdir, "[dirname]", "Removes directory [dirname] (only if it is empty).")
     DEF_COMMAND(ls, "[name]", "Lists files and directories in [name], or only [name] if [name] is a file.")
@@ -173,6 +174,43 @@ IMPL_COMMAND(cp) {
         dprintf(spp_fd, "Failed to copy file %s to %s: %s\n", argv[1], argv[2], strerror(errno));
         return ESP_OK;
     }
+    
+    return ESP_OK;
+}
+
+IMPL_COMMAND(speak) {
+    unsigned int file_opus_packets_len;
+    
+    if (argc != 3)
+        /* Wrong amount of arguments, or first and second argument isn't a path. */
+        return ESP_ERR_INVALID_ARG;
+    
+    ESP_LOGI(TAG, "Playing opus file: %s, with opus packets file: %s", argv[1], argv[2]);
+    
+    FILE *file_opus = fopen(argv[1], "rb");
+    if (!file_opus) {
+        dprintf(spp_fd, "Failed to open file %s: %s", argv[1], strerror(errno));
+        return ESP_OK;
+    }
+    
+    FILE *file_opus_packets = fopen(argv[2], "rb");
+    if (!file_opus_packets) {
+        dprintf(spp_fd, "Failed to open file %s: %s", argv[2], strerror(errno));
+        goto exit;
+    }
+    
+    fseek(file_opus_packets, 0, SEEK_END);
+    file_opus_packets_len = ftell(file_opus_packets);
+    fseek(file_opus_packets, 0, SEEK_SET);
+    
+    exit_dac_write_opus_loop = true;    
+    DAC_WRITE_OPUS(file_opus, file);
+    
+exit:
+    if (file_opus)
+        fclose(file_opus);
+    if (file_opus_packets)
+        fclose(file_opus_packets);
     
     return ESP_OK;
 }

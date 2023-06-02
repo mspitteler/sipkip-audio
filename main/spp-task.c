@@ -103,7 +103,8 @@ void spp_task_task_shut_down(void) {
 }
 
 void spp_wr_task_start_up(spp_wr_task_cb_t p_cback, int fd) {
-    xTaskCreate(p_cback, "SPP write/read", 4096, (void *)(ptrdiff_t)fd, 5, NULL);
+    // The stack size needs to be so big for this task because we call `dac_write_opus()' in here.
+    xTaskCreate(p_cback, "SPP write/read", 24576, (void *)(ptrdiff_t)fd, 5, NULL);
 }
 void spp_wr_task_shut_down(void) {
     vTaskDelete(NULL);
