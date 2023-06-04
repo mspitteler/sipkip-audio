@@ -2,13 +2,17 @@
 #include <stdbool.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "soc/ledc_periph.h"
+#include "esp_log.h"
 #include "esp_cpu.h"
 
 #include "muxed-gpio.h"
+
+static const char *const TAG = "muxed-gpio";
 
 #define GPIO_NUM_MUX_BUTTONS_OUT  GPIO_NUM_4
 #define GPIO_NUM_MUX_CLIPS_OUT    GPIO_NUM_5        
@@ -52,8 +56,17 @@
 #define MUX_TIMER_BITS(bits)                                                                                       \
     MUX_TIMER_BITS_TMP(bits)
     
+struct muxed_gpio_msg {
+    bool levels[MUXED_INPUT_N];
+};
+
 struct interrupt_handler_args {
     gpio_num_t gpio_num;
+    QueueHandle_t queue;
+};
+
+struct task_handler_args {
+    QueueHandle_t queue;
     muxed_inputs_on_changed_fn fn;
 };
 
@@ -115,8 +128,6 @@ static const struct { ledc_channel_t lmr_channel, bc_channel; } muxed_inouts_to_
  * GPIO_NUM_MUX_BUTTONS_OUT: |          |      |             |      |             |      |
  *                           |^^^^^^^^^^        ^^^^^^^^^^^^^       ^^^^^^^^^^^^^^        ^^^^^^^^^^
  */
-
-static volatile bool muxed_input_levels[MUXED_INPUT_N];
     
 static const ledc_timer_config_t ledc_timer0_config = {
     .speed_mode       = LEDC_HIGH_SPEED_MODE,
@@ -210,6 +221,8 @@ static const gpio_config_t gpio_configs[] = {
     }
 };
 
+static TaskHandle_t gpio_task_handle = NULL;
+
 static void IRAM_ATTR gpio_buttons_and_clips_interrupt_handler(void *arg) {
     static esp_cpu_cycle_count_t last_cycle_count[MUXED_INPUT_N];
     /* Get input from buttons if true, and from clips if false. */
@@ -226,28 +239,39 @@ static void IRAM_ATTR gpio_buttons_and_clips_interrupt_handler(void *arg) {
         if (difference <= (configCPU_CLOCK_HZ / MUX_PWM_FREQUENCY / 100UL * 110UL))
             return;
         /* Get input. */
-        bool level;
-        if (muxed_input_levels[muxed_inouts] != (level = gpio_get_level(args->gpio_num))) {
-            muxed_input_levels[muxed_inouts] = level;
-            args->fn(&muxed_input_levels);
-            muxed_input_levels[muxed_inouts] = 0;
+        if (gpio_get_level(args->gpio_num)) {
+            struct muxed_gpio_msg msg = {0};
+            msg.levels[muxed_inouts] = 1;
+       
+            xQueueSendFromISR(args->queue, &msg, NULL);
         }
     }
 }
 
 static void IRAM_ATTR gpio_switches_interrupt_handler(void *arg) {
     struct interrupt_handler_args *args = arg;
-    bool level;
     /* Get input. */
     /* Whether MUX_BUTTONS or MUX_CLIPS is high doesn't matter here. */
-    if (muxed_input_levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] != (level = gpio_get_level(args->gpio_num))) {
-        muxed_input_levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] = level;
-        args->fn(&muxed_input_levels);
-        muxed_input_levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] = 0;
+    if (gpio_get_level(args->gpio_num)) {
+        struct muxed_gpio_msg msg = {0};
+        msg.levels[gpio_num_to_muxed_inouts[0][args->gpio_num]] = 1;
+
+        xQueueSendFromISR(args->queue, &msg, NULL);
     }
 }
 
+static void muxed_gpio_task_handler(void *arg) {
+    struct muxed_gpio_msg msg;
+    struct task_handler_args *args = arg;
+    
+    for (;;)
+        if (pdTRUE == xQueueReceive(args->queue, &msg, (TickType_t)portMAX_DELAY))
+            args->fn(&msg.levels);
+}
+
 void muxed_gpio_setup(muxed_inputs_on_changed_fn fn) {
+    QueueHandle_t queue;
+    
     /* Configure GPIO with the given settings. */
     for (int i = 0; i < sizeof(gpio_configs) / sizeof(*gpio_configs); i++)
         ESP_ERROR_CHECK(gpio_config(&gpio_configs[i]));
@@ -291,6 +315,12 @@ void muxed_gpio_setup(muxed_inputs_on_changed_fn fn) {
        ESP_ERROR_CHECK(ledc_update_duty(config.speed_mode, config.channel));
     }
     
+    queue = xQueueCreate(50, sizeof(struct muxed_gpio_msg));
+    if (!queue) {
+        ESP_LOGE(TAG, "Failed to create queue for the GPIO interrupt\n");
+        return;
+    }
+    
     /* Register interrupt callbacks for the buttons and clips in/outputs. */
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     uint64_t bit_mask = gpio_pin_bit_mask_inout;
@@ -298,7 +328,7 @@ void muxed_gpio_setup(muxed_inputs_on_changed_fn fn) {
         if (bit_mask & 1) {
             struct interrupt_handler_args *args = malloc(sizeof(*args));
             args->gpio_num = test_bit;
-            args->fn = fn;
+            args->queue = queue;
             ESP_ERROR_CHECK(gpio_isr_handler_add(args->gpio_num, &gpio_buttons_and_clips_interrupt_handler, args));
         }
     }
@@ -309,16 +339,30 @@ void muxed_gpio_setup(muxed_inputs_on_changed_fn fn) {
         if (bit_mask & 1) {
             struct interrupt_handler_args *args = malloc(sizeof(*args));
             args->gpio_num = test_bit;
-            args->fn = fn;
+            args->queue = queue;
             ESP_ERROR_CHECK(gpio_isr_handler_add(args->gpio_num, &gpio_switches_interrupt_handler, args));
         }
+    }
+  
+    struct task_handler_args *args = malloc(sizeof(*args));
+    args->queue = queue;
+    args->fn = fn;
+    xTaskCreate(&muxed_gpio_task_handler, "GPIO task handler", 1024, args, 15, &gpio_task_handle);
+    if (!gpio_task_handle) {
+        ESP_LOGE(TAG, "Failed to create the GPIO handler task\n");
+        return;
     }
 
 #if 0
     // Turn off LEDC or PWM
-    for (int i = 0; i < sizeof(ledc_channels) / sizeof(*ledc_channels); i++)
-        ESP_ERROR_CHECK(ledc_stop(ledc_channels[i].speed_mode, ledc_channels[i].channel, 0));
+    for (int i = 0; i < sizeof(ledc_channel_configs) / sizeof(*ledc_channel_configs); i++)
+        ESP_ERROR_CHECK(ledc_stop(ledc_channel_configs[i].speed_mode, ledc_channel_configs[i].channel, 0));
     gpio_uninstall_isr_service();
+    
+    if (gpio_task_handle)
+        vTaskDelete(gpio_task_handle);
+    if (queue)
+        vQueueDelete(queue);
 #endif
 }
 

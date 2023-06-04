@@ -176,8 +176,8 @@ esp_err_t dac_write_opus(struct opus_mem_or_file opus_mem_or_file) {
     return ret;
 }
 
-/* Called from interrupt, so should be placed in IRAM. */
-static void IRAM_ATTR on_gpio_states_changed(volatile bool (*states)[19]) {
+
+static void on_gpio_states_changed(volatile bool (*states)[19]) {
     bool input_switch_levels[19];
     enum mode new_mode;
     
@@ -674,6 +674,8 @@ void app_main(void) {
     
     spp_task_task_shut_down();
     
+    vTaskDelete(dac_write_data_task_handle);
+    dac_write_data_task_handle = NULL;
     vSemaphoreDelete(dac_write_opus_mutex);
   
     ESP_LOGI(TAG, "Done!\n");
