@@ -8,24 +8,7 @@
 #define SPP_MAX_ARGC 16
 #define SPP_MAX_ARG_LEN 256
 
-#define DECL_COMMAND(command_name)                                                                                 \
-    IMPL_COMMAND(command_name);
-#define DEF_COMMAND(command_name, command_params, command_usage)                                                   \
-    {                                                                                                              \
-        .name = #command_name,                                                                                     \
-        .usage = "Usage: "#command_name" "command_params"\n\t"command_usage"\n",                                   \
-        .fn = &command_##command_name                                                                              \
-    },
-    
-#define IMPL_COMMAND(command_name)                                                                                 \
-    static esp_err_t command_##command_name(int argc, char **argv)
-
-struct vfs_commands {
-    const char *name;
-    const char *usage;
-    esp_err_t (*fn)(int argc, char **argv);
-};
-    
+extern int spp_fd;
 
 /**
  * @brief     read data from file descriptor
