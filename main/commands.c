@@ -10,6 +10,7 @@
 
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_littlefs.h"
 
 #include "commands.h"
 #include "vfs-acceptor.h"
@@ -32,7 +33,7 @@ static const char *const TAG = "commands";
     static esp_err_t command_##command_name(int argc, char **argv)
 
 DECL_COMMAND(help) DECL_COMMAND(rx) DECL_COMMAND(rm) DECL_COMMAND(mv) DECL_COMMAND(cp) DECL_COMMAND(speak)
-DECL_COMMAND(mkdir) DECL_COMMAND(rmdir) DECL_COMMAND(ls) DECL_COMMAND(cwd) DECL_COMMAND(pwd)
+DECL_COMMAND(mkdir) DECL_COMMAND(rmdir) DECL_COMMAND(ls) DECL_COMMAND(cwd) DECL_COMMAND(pwd) DECL_COMMAND(du)
 
 const struct vfs_commands commands[] = {
     DEF_COMMAND(help, "[command_name]", "Prints help information about command [command_name].")
@@ -46,6 +47,7 @@ const struct vfs_commands commands[] = {
     DEF_COMMAND(ls, "[name]", "Lists files and directories in [name], or only [name] if [name] is a file.")
     DEF_COMMAND(cwd, "[dirname]", "Change current working directory to [dirname]")
     DEF_COMMAND(pwd, "", "Prints current working directory.")
+    DEF_COMMAND(du, "", "Prints the disk usage and total capacity.")
     {0}
 };
 
@@ -169,13 +171,13 @@ IMPL_COMMAND(speak) {
     
     FILE *file_opus = fopen(argv[1], "rb");
     if (!file_opus) {
-        dprintf(spp_fd, "Failed to open file %s: %s", argv[1], strerror(errno));
+        dprintf(spp_fd, "Failed to open file %s: %s\n", argv[1], strerror(errno));
         return ESP_OK;
     }
     
     FILE *file_opus_packets = fopen(argv[2], "rb");
     if (!file_opus_packets) {
-        dprintf(spp_fd, "Failed to open file %s: %s", argv[2], strerror(errno));
+        dprintf(spp_fd, "Failed to open file %s: %s\n", argv[2], strerror(errno));
         goto exit;
     }
     
@@ -286,5 +288,21 @@ IMPL_COMMAND(pwd) {
     }
     dprintf(spp_fd, "%s\n", buffer);
     
+    return ESP_OK;
+}
+
+IMPL_COMMAND(du) {
+    int ret;
+    
+    if (argc != 1)
+        return ESP_ERR_INVALID_ARG;
+    
+    size_t total = 0UL, used = 0UL;
+    ret = esp_littlefs_info("storage", &total, &used);
+    if (ret != ESP_OK) {
+        dprintf(spp_fd, "Failed to get LITTLEFS partition information (%s).\n", esp_err_to_name(ret));
+    } else {
+        dprintf(spp_fd, "Used: %lu, total: %lu\n", used, total);
+    }
     return ESP_OK;
 }
