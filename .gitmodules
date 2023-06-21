@@ -1,9 +1,9 @@
 [submodule "components/esp-libopus"]
 	path = components/esp-libopus
-	url = https://github.com/XasWorks/esp-libopus.git
+	url = https://github.com/mspitteler/esp-libopus.git
 [submodule "components/libglob"]
 	path = components/libglob
-	url = https://github.com/void-linux/libglob.git
+	url = https://github.com/mspitteler/esp-libglob.git
 [submodule "components/esp_littlefs"]
 	path = components/esp_littlefs
 	url = https://github.com/joltwallet/esp_littlefs.git
